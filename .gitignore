@@ -2,3 +2,4 @@
 quickap
 quickap-darwin-*
 quickap-*.exe
+dist/

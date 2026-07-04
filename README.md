@@ -57,33 +57,57 @@ duplicate):
 
 ## Install
 
-Requires Go 1.26+ to build. No external dependencies; runs on Linux, macOS,
-and Windows.
+### Download a release
+
+Prebuilt binaries for every tagged version are on the
+[releases page](https://github.com/jordancannon88/quickap/releases),
+built automatically by the release workflow:
+
+| File                          | Platform                        |
+| ----------------------------- | --------------------------------|
+| `quickap-linux-amd64`         | Linux, x86-64                   |
+| `quickap-linux-arm64`         | Linux, ARM64                    |
+| `quickap-darwin-arm64`        | macOS, Apple Silicon (M-series) |
+| `quickap-darwin-amd64`        | macOS, Intel                    |
+| `quickap-windows-amd64.exe`   | Windows, x86-64                 |
 
 ```sh
-go build -o quickap .
+# example: Linux x86-64
+curl -sLo quickap https://github.com/jordancannon88/quickap/releases/latest/download/quickap-linux-amd64
+chmod +x quickap
+mv quickap ~/.local/bin/   # or anywhere on your PATH
+```
+
+macOS note: binaries downloaded via browser get quarantined by Gatekeeper —
+clear it with `xattr -d com.apple.quarantine ./quickap`. The binaries are
+unsigned; build locally if you prefer.
+
+### Build locally
+
+Requires Go 1.26+. No external dependencies, no cgo.
+
+```sh
+git clone https://github.com/jordancannon88/quickap.git
+cd quickap
+go test ./...              # run the tests
+go build -o quickap .      # build for this machine
 cp quickap ~/.local/bin/   # or anywhere on your PATH
 ```
 
-### Cross-compiling for macOS
-
-Prebuilt macOS binaries are included in this directory:
-
-- `quickap-darwin-arm64` — Apple Silicon (M1/M2/M3/M4)
-- `quickap-darwin-amd64` — Intel Macs
-
-To rebuild them (no cgo, so cross-compilation just works):
+Cross-compile by setting the target platform, e.g.:
 
 ```sh
 GOOS=darwin GOARCH=arm64 go build -o quickap-darwin-arm64 .
-GOOS=darwin GOARCH=amd64 go build -o quickap-darwin-amd64 .
+GOOS=windows GOARCH=amd64 go build -o quickap-windows-amd64.exe .
 ```
 
-Copy with `scp` to avoid macOS quarantine; if a binary arrives via browser
-download or AirDrop and Gatekeeper blocks it, clear the flag with
-`xattr -d com.apple.quarantine ./quickap`. The binaries are unsigned —
-fine for personal use, but distribution to others warrants
-codesigning/notarization.
+### CI & releases
+
+GitHub Actions runs vet, tests, and a build on every push and pull request
+(`.github/workflows/ci.yml`). Pushing a tag matching `v*` (e.g. `v1.0.0`)
+runs the release workflow (`.github/workflows/release.yml`), which builds
+the five platform binaries above and publishes them as a GitHub release
+with generated notes.
 
 ## Usage
 
@@ -179,3 +203,7 @@ Extensions are matched case-insensitively.
 - Unreadable files or directories are skipped and counted in the footer,
   never fatal.
 - Colors turn off automatically when output is piped, or set `NO_COLOR=1`.
+
+## License
+
+[AGPL-3.0](LICENSE) — GNU Affero General Public License v3.0.
