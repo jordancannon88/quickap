@@ -486,7 +486,10 @@ func hashFile(path string) (string, error) {
 // hashCache persists computed SHA-256 hashes between runs so unchanged
 // files (same size and mtime) are never re-read. One cache file per scan
 // root, under the user cache dir. A nil *hashCache is a valid no-op cache.
+// get/put are safe for concurrent use (lookups on the scan goroutine race
+// with puts from hash workers).
 type hashCache struct {
+	mu      sync.Mutex
 	file    string
 	dirty   bool
 	touched map[string]bool
@@ -530,6 +533,8 @@ func (c *hashCache) get(path string, size, mtime int64) (string, bool) {
 	if c == nil {
 		return "", false
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	e, ok := c.Entries[path]
 	if !ok || e.Size != size || e.Mtime != mtime {
 		return "", false
@@ -542,6 +547,8 @@ func (c *hashCache) put(path string, size, mtime int64, hash string) {
 	if c == nil {
 		return
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.Entries[path] = cacheEntry{Size: size, Mtime: mtime, Hash: hash}
 	c.touched[path] = true
 	c.dirty = true
@@ -554,6 +561,8 @@ func (c *hashCache) save() {
 	if c == nil {
 		return
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for path := range c.Entries {
 		if c.touched[path] {
 			continue

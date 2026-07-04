@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -160,6 +162,30 @@ func TestHashCache(t *testing.T) {
 		t.Error("nil cache should always miss")
 	}
 	nc.save() // must not panic
+}
+
+// Regression: cache lookups on the scan goroutine race with puts from
+// hash workers; hashCache must be internally synchronized. Run with -race.
+func TestHashCacheConcurrent(t *testing.T) {
+	c := &hashCache{
+		file:    filepath.Join(t.TempDir(), "cache.json"),
+		touched: map[string]bool{},
+		Entries: map[string]cacheEntry{},
+	}
+	var wg sync.WaitGroup
+	for w := 0; w < 8; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < 500; i++ {
+				path := fmt.Sprintf("/f%d-%d.jpg", w, i)
+				c.put(path, int64(i), int64(i), "h")
+				c.get(path, int64(i), int64(i))
+				c.get("/f0-0.jpg", 0, 0)
+			}
+		}(w)
+	}
+	wg.Wait()
 }
 
 func TestCacheSavePrunesDeleted(t *testing.T) {
