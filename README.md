@@ -17,28 +17,7 @@ A category command gives the detailed view — summary box, reclaimable space,
 and a per-extension breakdown with two-tone bars (cyan unique, yellow
 duplicate):
 
-```
-  ◆ quickap · file index
-  /home/jordan/stuff
-
-  Videos
-
-  ┌────────────────────────────────────────────┐
-  │  All videos               3        1.8 MB  │
-  │  Unique videos            2        1.0 MB  │
-  │  Duplicates               1      781.2 KB  │
-  └────────────────────────────────────────────┘
-  781.2 KB reclaimable by removing duplicates
-
-  By extension
-            all   uniq   dup                                size
-  .mkv        1      1     –  ████████████████████████  781.2 KB
-  .mp4        1      0     1  ████████████████████████  781.2 KB
-  .webm       1      1     –  ████████████████████████  293.0 KB
-  bar: █ unique  █ duplicate
-
-  scanned in 2ms
-```
+<img src="assets/screenshot-detail.svg" alt="quickap videos output: a summary box showing 3 videos, 2 unique, 1 duplicate with 781.2 KB reclaimable, and a per-extension table for .mkv, .mp4, and .webm with two-tone bar charts" width="600">
 
 ## Install
 

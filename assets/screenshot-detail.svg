@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="575" height="490" viewBox="0 0 575 490" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14">
+<rect width="575" height="490" rx="10" fill="#161b22" stroke="#30363d"/>
+<path d="M0 34h575" stroke="#30363d"/>
+<rect width="575" height="34" rx="10" fill="#21262d"/>
+<rect y="24" width="575" height="10" fill="#21262d"/>
+<circle cx="22" cy="17.0" r="6" fill="#f47067"/>
+<circle cx="42" cy="17.0" r="6" fill="#e0b959"/>
+<circle cx="62" cy="17.0" r="6" fill="#8ddb8c"/>
+<text x="287.5" y="21.0" text-anchor="middle" fill="#848d97" font-size="12">quickap</text>
+<text x="18" y="66" xml:space="preserve"><tspan fill="#e6edf3">  </tspan><tspan fill="#dcbdfb" font-weight="bold">◆ quickap</tspan><tspan fill="#e6edf3"> </tspan><tspan fill="#848d97">· file index</tspan></text>
+<text x="18" y="87" xml:space="preserve"><tspan fill="#e6edf3">  </tspan><tspan fill="#848d97">/home/jordan/stuff</tspan></text>
+<text x="18" y="129" xml:space="preserve"><tspan fill="#e6edf3">  </tspan><tspan fill="#76cae8" font-weight="bold">Videos</tspan></text>
+<text x="18" y="171" xml:space="preserve"><tspan fill="#e6edf3">  ┌────────────────────────────────────────────┐</tspan></text>
+<text x="18" y="192" xml:space="preserve"><tspan fill="#e6edf3">  │  </tspan><tspan fill="#848d97">All videos        </tspan><tspan fill="#e6edf3">       </tspan><tspan fill="#76cae8" font-weight="bold">3</tspan><tspan fill="#e6edf3">        </tspan><tspan fill="#76cae8">1.8 MB</tspan><tspan fill="#e6edf3">  │</tspan></text>
+<text x="18" y="213" xml:space="preserve"><tspan fill="#e6edf3">  │  </tspan><tspan fill="#848d97">Unique videos     </tspan><tspan fill="#e6edf3">       </tspan><tspan fill="#8ddb8c" font-weight="bold">2</tspan><tspan fill="#e6edf3">        </tspan><tspan fill="#8ddb8c">1.0 MB</tspan><tspan fill="#e6edf3">  │</tspan></text>
+<text x="18" y="234" xml:space="preserve"><tspan fill="#e6edf3">  │  </tspan><tspan fill="#848d97">Duplicates        </tspan><tspan fill="#e6edf3">       </tspan><tspan fill="#e0b959" font-weight="bold">1</tspan><tspan fill="#e6edf3">      </tspan><tspan fill="#e0b959">781.2 KB</tspan><tspan fill="#e6edf3">  │</tspan></text>
+<text x="18" y="255" xml:space="preserve"><tspan fill="#e6edf3">  └────────────────────────────────────────────┘</tspan></text>
+<text x="18" y="276" xml:space="preserve"><tspan fill="#e6edf3">  </tspan><tspan fill="#848d97">781.2 KB reclaimable by removing duplicates</tspan></text>
+<text x="18" y="318" xml:space="preserve"><tspan fill="#e6edf3">  </tspan><tspan fill="#e6edf3" font-weight="bold">By extension</tspan></text>
+<text x="18" y="339" xml:space="preserve"><tspan fill="#e6edf3">            </tspan><tspan fill="#848d97">all</tspan><tspan fill="#e6edf3">   </tspan><tspan fill="#848d97">uniq</tspan><tspan fill="#e6edf3">   </tspan><tspan fill="#848d97">dup</tspan><tspan fill="#e6edf3">                                </tspan><tspan fill="#848d97">size</tspan></text>
+<text x="18" y="360" xml:space="preserve"><tspan fill="#e6edf3">  .mkv        1      1     </tspan><tspan fill="#848d97">–</tspan><tspan fill="#e6edf3">  </tspan><tspan fill="#76cae8">████████████████████████</tspan><tspan fill="#e6edf3">  781.2 KB</tspan></text>
+<text x="18" y="381" xml:space="preserve"><tspan fill="#e6edf3">  .mp4        1      0     </tspan><tspan fill="#e0b959">1</tspan><tspan fill="#e6edf3">  </tspan><tspan fill="#e0b959">████████████████████████</tspan><tspan fill="#e6edf3">  781.2 KB</tspan></text>
+<text x="18" y="402" xml:space="preserve"><tspan fill="#e6edf3">  .webm       1      1     </tspan><tspan fill="#848d97">–</tspan><tspan fill="#e6edf3">  </tspan><tspan fill="#76cae8">████████████████████████</tspan><tspan fill="#e6edf3">  293.0 KB</tspan></text>
+<text x="18" y="423" xml:space="preserve"><tspan fill="#e6edf3">  </tspan><tspan fill="#848d97">bar:</tspan><tspan fill="#e6edf3"> </tspan><tspan fill="#76cae8">█</tspan><tspan fill="#848d97"> unique </tspan><tspan fill="#e6edf3"> </tspan><tspan fill="#e0b959">█</tspan><tspan fill="#848d97"> duplicate</tspan></text>
+<text x="18" y="465" xml:space="preserve"><tspan fill="#e6edf3">  </tspan><tspan fill="#848d97">scanned in 1ms</tspan></text>
+</svg>
