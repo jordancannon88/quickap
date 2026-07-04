@@ -1,0 +1,4 @@
+# built binaries
+quickap
+quickap-darwin-*
+quickap-*.exe

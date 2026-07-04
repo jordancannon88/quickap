@@ -1,0 +1,178 @@
+# quickap
+
+A fast, zero-dependency CLI that indexes images, documents, music, videos,
+archives, and applications under the current directory and reports totals,
+per-extension stats, and duplicates — with a clean, colorful terminal UI.
+
+The bare command gives a compact overview of every category:
+
+```
+  ◆ quickap · file index
+  /home/jordan/stuff
+
+  category       files       size   uniq   dup   reclaimable
+  Images            24     1.6 MB     20     4      140.6 KB
+  Documents          9   419.9 KB      7     2       63.5 KB
+  Music              8     2.0 MB      6     2      664.1 KB
+  Videos             3     1.8 MB      2     1      781.2 KB
+  Archives           2   341.8 KB      2     –             –
+  Applications       2   781.2 KB      1     1      390.6 KB
+  ──────────────────────────────────────────────────────────
+  Total             48     6.9 MB     38    10        2.0 MB
+
+  run "quickap <category>" for per-extension detail — e.g. quickap images
+
+  scanned in 6ms
+```
+
+A category command gives the detailed view — summary box, reclaimable space,
+and a per-extension breakdown with two-tone bars (cyan unique, yellow
+duplicate):
+
+```
+  ◆ quickap · file index
+  /home/jordan/stuff
+
+  Videos
+
+  ┌────────────────────────────────────────────┐
+  │  All videos               3        1.8 MB  │
+  │  Unique videos            2        1.0 MB  │
+  │  Duplicates               1      781.2 KB  │
+  └────────────────────────────────────────────┘
+  781.2 KB reclaimable by removing duplicates
+
+  By extension
+            all   uniq   dup                                size
+  .mkv        1      1     –  ████████████████████████  781.2 KB
+  .mp4        1      0     1  ████████████████████████  781.2 KB
+  .webm       1      1     –  ████████████████████████  293.0 KB
+  bar: █ unique  █ duplicate
+
+  scanned in 2ms
+```
+
+## Install
+
+Requires Go 1.26+ to build. No external dependencies; runs on Linux, macOS,
+and Windows.
+
+```sh
+go build -o quickap .
+cp quickap ~/.local/bin/   # or anywhere on your PATH
+```
+
+### Cross-compiling for macOS
+
+Prebuilt macOS binaries are included in this directory:
+
+- `quickap-darwin-arm64` — Apple Silicon (M1/M2/M3/M4)
+- `quickap-darwin-amd64` — Intel Macs
+
+To rebuild them (no cgo, so cross-compilation just works):
+
+```sh
+GOOS=darwin GOARCH=arm64 go build -o quickap-darwin-arm64 .
+GOOS=darwin GOARCH=amd64 go build -o quickap-darwin-amd64 .
+```
+
+Copy with `scp` to avoid macOS quarantine; if a binary arrives via browser
+download or AirDrop and Gatekeeper blocks it, clear the flag with
+`xattr -d com.apple.quarantine ./quickap`. The binaries are unsigned —
+fine for personal use, but distribution to others warrants
+codesigning/notarization.
+
+## Usage
+
+```sh
+quickap [command] [flags]
+
+quickap                   # overview of all categories
+quickap images            # detailed image report
+quickap docs -list        # document report + duplicate groups
+quickap music -move DIR   # move music duplicate groups into DIR for sorting
+quickap videos -delete    # delete video duplicates, keeping originals
+quickap -ignore dist      # skip every dir named "dist" (repeatable, or a,b,c)
+quickap -hidden           # include hidden directories in the scan
+quickap help              # full help, including per-command flags
+quickap help docs         # help for one command (also: quickap docs -help)
+quickap version           # print version (also: -version)
+```
+
+### Commands
+
+| Command      | Description                                          |
+| ------------ | -----------------------------------------------------|
+| *(none)*     | Index all categories, compact overview.              |
+| `images`     | Index images only.                                   |
+| `docs`       | Index documents only (alias: `documents`).           |
+| `music`      | Index music only.                                    |
+| `videos`     | Index videos only (alias: `video`).                  |
+| `archives`   | Index archives only (alias: `archive`).              |
+| `apps`       | Index applications only (aliases: `app`, `applications`). |
+| `help [cmd]` | Show help, or help for one command.                  |
+| `version`    | Print the version.                                   |
+
+### Flags
+
+Flags operate on the current command's category. The modifying flags `-move`
+and `-delete` act on one category at a time, so they **require a category
+command**; the bare `quickap` command indexes and reports only.
+`quickap help <cmd>` shows the exact per-command flag descriptions.
+
+| Flag        | Commands       | Description                                                                                                                 |
+| ----------- | -------------- | --------------------------------------------------------------------------------------------------------------------------|
+| `-list`     | all            | List each duplicate group with file paths. The kept original is marked `✓`, duplicates `✗`.                                 |
+| `-move DIR` | category cmds  | Move each duplicate group — **original and copies** — into `DIR/<category>/group-NNN/` for manual side-by-side sorting. `DIR` is created if needed and resolved relative to the current directory. |
+| `-delete`   | category cmds  | **Permanently delete** duplicate files, keeping each group's original. No undo. Cannot be combined with `-move`.            |
+| `-ignore DIR` | all          | Skip a directory while scanning. A bare name (`node_modules`) skips every directory with that name; a path (`files/cache`) skips that path relative to the current directory. Repeat the flag or comma-separate for multiple: `-ignore tunes,media -ignore dist`. |
+| `-hidden`   | all            | Include hidden directories (`.foo/`) in the scan. Skipped by default.                                                       |
+| `-version`  | all            | Print the version and exit.                                                                                                 |
+| `-help`     | all            | Show help for the current command.                                                                                          |
+
+Commands and flags compose: `quickap docs -hidden -list -move ../dupes`.
+`-move` keeps categories separate — e.g. `quickap images -move ../dupes`
+writes to `../dupes/images/group-001/`.
+
+## How duplicate detection works
+
+- Files are grouped by byte size first; only same-size candidates are hashed
+  (SHA-256, in parallel across CPU cores), so unique-sized files are never
+  read and scans stay fast on large trees.
+- **Duplicates are byte-identical files**, regardless of filename or
+  extension — the same bytes saved as `movie.mp4` and `movie-copy.mkv` are
+  caught. Similar-looking but re-encoded/resized files are *not* flagged.
+- Duplicates are detected within each category independently.
+- Within a group, the lexically first path counts as the original; the rest
+  are duplicates. The "Duplicates" count is the number of redundant copies,
+  so a group of 3 identical files counts as 1 original + 2 duplicates.
+  `-list` shows exactly which file each group keeps — review it before
+  running `-delete`.
+
+## Categories
+
+| Category     | Extensions                                                              |
+| ------------ | ------------------------------------------------------------------------|
+| images       | `.avif .bmp .gif .heic .heif .ico .jpeg .jpg .png .svg .tif .tiff .webp` |
+| documents    | `.csv .doc .docx .epub .md .odp .ods .odt .pdf .ppt .pptx .rtf .txt .xls .xlsx` |
+| music        | `.aac .aif .aiff .flac .m4a .mid .midi .mp3 .ogg .opus .wav .wma`       |
+| videos       | `.3gp .avi .flv .m4v .mkv .mov .mp4 .mpeg .mpg .ogv .webm .wmv`         |
+| archives     | `.7z .7zip .bz2 .gz .iso .rar .tar .tbz .tgz .xz .zip .zst`             |
+| apps         | `.apk .appimage .deb .dmg .exe .msi .pkg .rpm`                          |
+
+Extensions are matched case-insensitively.
+
+## Notes
+
+- The scan is recursive from the current working directory.
+- The summary report always reflects the state **before** `-move`/`-delete`.
+- `-move` keeps original filenames, suffixing collisions within a group
+  (`a.jpg`, `a-2.jpg`), and falls back to copy+delete across filesystems.
+  Collisions are detected case-insensitively (`Photo.JPG` vs `photo.jpg`)
+  so nothing is overwritten on case-insensitive filesystems (macOS APFS,
+  Windows).
+- A `-move` target inside the current directory will be re-indexed on the
+  next run; use a target outside it (e.g. `../dupes`) to avoid that.
+- Unreadable files or directories are skipped and counted in the footer,
+  never fatal.
+- Colors turn off automatically when output is piped, or set `NO_COLOR=1`.
