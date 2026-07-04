@@ -73,11 +73,21 @@ built automatically by the release workflow:
 | `quickap-darwin-amd64`        | macOS, Intel                    |
 | `quickap-windows-amd64.exe`   | Windows, x86-64                 |
 
+Each release also includes a `checksums.txt` with the SHA-256 of every
+binary.
+
 ```sh
 # example: Linux x86-64
 curl -sLo quickap https://github.com/jordancannon88/quickap/releases/latest/download/quickap-linux-amd64
 chmod +x quickap
 mv quickap ~/.local/bin/   # or anywhere on your PATH
+```
+
+To verify a download:
+
+```sh
+curl -sLO https://github.com/jordancannon88/quickap/releases/latest/download/checksums.txt
+sha256sum -c checksums.txt --ignore-missing   # macOS: shasum -a 256 -c
 ```
 
 macOS note: binaries downloaded via browser get quarantined by Gatekeeper —
@@ -109,7 +119,7 @@ GitHub Actions runs vet, tests, and a build on every push and pull request
 (`.github/workflows/ci.yml`). Pushing a tag matching `v*` (e.g. `v1.0.0`)
 runs the release workflow (`.github/workflows/release.yml`), which builds
 the five platform binaries above and publishes them as a GitHub release
-with generated notes.
+with a per-commit changelog and a `checksums.txt` of SHA-256 sums.
 
 ## Usage
 
