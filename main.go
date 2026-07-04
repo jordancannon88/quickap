@@ -6,6 +6,8 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -102,11 +104,12 @@ func categoryBySub(sub string) *category {
 }
 
 type fileEntry struct {
-	path string
-	ext  string
-	size int64
-	hash string // set only for files that share a size with another file
-	dup  bool
+	path  string
+	ext   string
+	size  int64
+	mtime int64  // UnixNano, for hash-cache validity
+	hash  string // set only for files that share a size with another file
+	dup   bool
 }
 
 type extStat struct {
@@ -209,6 +212,8 @@ func main() {
 	showVersion := fs.Bool("version", false, "print version and exit")
 	var ignores multiFlag
 	fs.Var(&ignores, "ignore", "skip `DIR` while scanning; repeat or comma-separate for multiple")
+	noCache := fs.Bool("no-cache", false, "disable the hash cache for this run")
+	verify := fs.Bool("verify", false, "re-hash all duplicate candidates, ignoring cached hashes")
 	// -move and -delete act on one category, so they require a category
 	// command; the bare command indexes and reports only.
 	moveDir, deleteDups := new(string), new(bool)
@@ -241,11 +246,18 @@ func main() {
 	start := time.Now()
 	byCategory, skipped := scan(root, active, *hidden, ignores)
 
+	var cache *hashCache
+	if !*noCache {
+		cache = loadCache(root)
+	}
+	var hs hashStats
 	var results []catResult
 	for _, cat := range active {
 		entries := byCategory[cat.key]
-		groups, unreadable := findDuplicates(entries)
+		groups, unreadable, s := findDuplicates(entries, cache, *verify)
 		skipped += unreadable
+		hs.hashed += s.hashed
+		hs.cached += s.cached
 
 		stats := map[string]*extStat{}
 		var t totals
@@ -273,6 +285,7 @@ func main() {
 		}
 		results = append(results, catResult{cat, groups, stats, t})
 	}
+	cache.save()
 	elapsed := time.Since(start)
 
 	fmt.Println()
@@ -283,7 +296,7 @@ func main() {
 	} else {
 		renderOverview(results)
 	}
-	renderFooter(skipped, elapsed)
+	renderFooter(skipped, elapsed, hs)
 
 	if *listDups {
 		for _, r := range results {
@@ -373,7 +386,9 @@ func scan(root string, active []category, includeHidden bool, ignores []string) 
 				skipped++
 				return nil
 			}
-			byCategory[cat.key] = append(byCategory[cat.key], &fileEntry{path: path, ext: ext, size: info.Size()})
+			byCategory[cat.key] = append(byCategory[cat.key], &fileEntry{
+				path: path, ext: ext, size: info.Size(), mtime: info.ModTime().UnixNano(),
+			})
 			return nil
 		}
 		return nil
@@ -384,8 +399,9 @@ func scan(root string, active []category, includeHidden bool, ignores []string) 
 // findDuplicates hashes files that share a byte size, flags every file whose
 // content was already seen at a lexically earlier path, and returns the
 // identical-content groups (each sorted by path; the first file is treated as
-// the original). Files that cannot be read count as unique.
-func findDuplicates(entries []*fileEntry) ([][]*fileEntry, int) {
+// the original). Files that cannot be read count as unique. Hashes for
+// unchanged files are reused from cache unless verify is set.
+func findDuplicates(entries []*fileEntry, cache *hashCache, verify bool) ([][]*fileEntry, int, hashStats) {
 	bySize := map[int64][]*fileEntry{}
 	for _, e := range entries {
 		bySize[e.size] = append(bySize[e.size], e)
@@ -397,8 +413,9 @@ func findDuplicates(entries []*fileEntry) ([][]*fileEntry, int) {
 			candidates = append(candidates, group...)
 		}
 	}
+	var stats hashStats
 	if len(candidates) == 0 {
-		return nil, 0
+		return nil, 0, stats
 	}
 
 	var unreadable int
@@ -406,6 +423,13 @@ func findDuplicates(entries []*fileEntry) ([][]*fileEntry, int) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, runtime.NumCPU())
 	for _, e := range candidates {
+		if !verify {
+			if h, ok := cache.get(e.path, e.size, e.mtime); ok {
+				e.hash = h
+				stats.cached++
+				continue
+			}
+		}
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(e *fileEntry) {
@@ -419,6 +443,8 @@ func findDuplicates(entries []*fileEntry) ([][]*fileEntry, int) {
 				return
 			}
 			e.hash = h
+			cache.put(e.path, e.size, e.mtime, h)
+			stats.hashed++
 		}(e)
 	}
 	wg.Wait()
@@ -441,7 +467,7 @@ func findDuplicates(entries []*fileEntry) ([][]*fileEntry, int) {
 		groups = append(groups, group)
 	}
 	sort.Slice(groups, func(i, j int) bool { return groups[i][0].path < groups[j][0].path })
-	return groups, unreadable
+	return groups, unreadable, stats
 }
 
 func hashFile(path string) (string, error) {
@@ -454,7 +480,106 @@ func hashFile(path string) (string, error) {
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}
-	return string(h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// hashCache persists computed SHA-256 hashes between runs so unchanged
+// files (same size and mtime) are never re-read. One cache file per scan
+// root, under the user cache dir. A nil *hashCache is a valid no-op cache.
+type hashCache struct {
+	file    string
+	dirty   bool
+	touched map[string]bool
+	Entries map[string]cacheEntry `json:"entries"`
+}
+
+type cacheEntry struct {
+	Size  int64  `json:"size"`
+	Mtime int64  `json:"mtime_ns"`
+	Hash  string `json:"sha256"`
+}
+
+func cacheFileFor(root string) (string, error) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(root))
+	return filepath.Join(dir, "quickap", hex.EncodeToString(sum[:8])+".json"), nil
+}
+
+// loadCache reads the cache for root, returning an empty cache on any
+// error (missing file, corrupt JSON) — the cache is an optimization only.
+func loadCache(root string) *hashCache {
+	file, err := cacheFileFor(root)
+	if err != nil {
+		return nil
+	}
+	c := &hashCache{file: file, touched: map[string]bool{}, Entries: map[string]cacheEntry{}}
+	data, err := os.ReadFile(file)
+	if err == nil {
+		if json.Unmarshal(data, c) != nil || c.Entries == nil {
+			c.Entries = map[string]cacheEntry{}
+		}
+	}
+	return c
+}
+
+// get returns the cached hash for path if size and mtime still match.
+func (c *hashCache) get(path string, size, mtime int64) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	e, ok := c.Entries[path]
+	if !ok || e.Size != size || e.Mtime != mtime {
+		return "", false
+	}
+	c.touched[path] = true
+	return e.Hash, true
+}
+
+func (c *hashCache) put(path string, size, mtime int64, hash string) {
+	if c == nil {
+		return
+	}
+	c.Entries[path] = cacheEntry{Size: size, Mtime: mtime, Hash: hash}
+	c.touched[path] = true
+	c.dirty = true
+}
+
+// save prunes entries whose files no longer exist and writes the cache
+// back if anything changed. Errors are ignored — worst case the next run
+// re-hashes.
+func (c *hashCache) save() {
+	if c == nil {
+		return
+	}
+	for path := range c.Entries {
+		if c.touched[path] {
+			continue
+		}
+		if _, err := os.Lstat(path); os.IsNotExist(err) {
+			delete(c.Entries, path)
+			c.dirty = true
+		}
+	}
+	if !c.dirty {
+		return
+	}
+	data, err := json.Marshal(c)
+	if err != nil {
+		return
+	}
+	if os.MkdirAll(filepath.Dir(c.file), 0o755) != nil {
+		return
+	}
+	os.WriteFile(c.file, data, 0o644)
+}
+
+// hashStats counts how duplicate-candidate hashes were obtained.
+type hashStats struct {
+	hashed int // files read and hashed this run
+	cached int // hashes reused from the cache
 }
 
 func relPath(root, path string) string {
@@ -693,12 +818,18 @@ func renderSection(cat category, stats map[string]*extStat, t totals) {
 	}
 }
 
-func renderFooter(skipped int, elapsed time.Duration) {
+func renderFooter(skipped int, elapsed time.Duration, hs hashStats) {
 	unit := time.Millisecond
 	if elapsed < time.Millisecond {
 		unit = time.Microsecond
 	}
 	note := fmt.Sprintf("scanned in %s", elapsed.Round(unit))
+	if hs.hashed > 0 || hs.cached > 0 {
+		note += fmt.Sprintf(" · %d hashed", hs.hashed)
+		if hs.cached > 0 {
+			note += fmt.Sprintf(", %d from cache", hs.cached)
+		}
+	}
 	if skipped > 0 {
 		note += fmt.Sprintf(" · %d entries unreadable", skipped)
 	}
@@ -807,6 +938,9 @@ func printCommandBlock(c cmdHelp) {
 	h("               (files/cache) skips that path relative to the current")
 	h("               directory; repeat or comma-separate for multiple")
 	h("  " + cyan("-hidden") + "      include hidden directories (.foo/) in the scan")
+	h("  " + cyan("-no-cache") + "    disable the hash cache for this run")
+	h("  " + cyan("-verify") + "      re-hash all duplicate candidates, ignoring cached")
+	h("               hashes (the cache is still updated)")
 	h("  " + cyan("-version") + "     print version and exit")
 	h("  " + cyan("-help") + "        show help for this command")
 }
@@ -865,6 +999,9 @@ func printHelp() {
 	h("  · -move and -delete act on one category at a time, so they require")
 	h("    a category command: quickap images -delete, quickap docs -move DIR")
 	h("  · hidden directories (.git, ...) are skipped unless -hidden is set")
+	h("  · computed hashes are cached (per scan directory, keyed by file size")
+	h("    and mtime) so unchanged files are never re-read; repeat runs only")
+	h("    hash new or modified files — use -verify to force a full re-hash")
 	h("  · " + yellow("-delete is permanent") + " — there is no undo; run -list first to")
 	h("    review, or use -move to sort manually instead")
 	h("  · -move modifies your files — the summary report always shows the")

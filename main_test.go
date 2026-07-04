@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -106,9 +107,12 @@ func TestFindDuplicates(t *testing.T) {
 		write("e.jpg", "unique"),
 	}
 
-	groups, unreadable := findDuplicates(entries)
+	groups, unreadable, stats := findDuplicates(entries, nil, false)
 	if unreadable != 0 {
 		t.Fatalf("unreadable = %d, want 0", unreadable)
+	}
+	if stats.hashed != 3 || stats.cached != 0 {
+		t.Errorf("stats = %+v, want 3 hashed (the size-collision candidates), 0 cached", stats)
 	}
 	if len(groups) != 1 || len(groups[0]) != 3 {
 		t.Fatalf("groups = %d with %d files, want 1 group of 3", len(groups), len(groups[0]))
@@ -125,5 +129,115 @@ func TestFindDuplicates(t *testing.T) {
 	}
 	if dups != 2 {
 		t.Errorf("dup count = %d, want 2", dups)
+	}
+}
+
+func TestHashCache(t *testing.T) {
+	c := &hashCache{
+		file:    filepath.Join(t.TempDir(), "cache.json"),
+		touched: map[string]bool{},
+		Entries: map[string]cacheEntry{},
+	}
+
+	c.put("/a.jpg", 100, 42, "deadbeef")
+	if h, ok := c.get("/a.jpg", 100, 42); !ok || h != "deadbeef" {
+		t.Errorf("get after put = %q, %v; want deadbeef, true", h, ok)
+	}
+	if _, ok := c.get("/a.jpg", 100, 43); ok {
+		t.Error("get with changed mtime should miss")
+	}
+	if _, ok := c.get("/a.jpg", 101, 42); ok {
+		t.Error("get with changed size should miss")
+	}
+	if _, ok := c.get("/other.jpg", 100, 42); ok {
+		t.Error("get of unknown path should miss")
+	}
+
+	// nil cache is a valid no-op
+	var nc *hashCache
+	nc.put("/x", 1, 1, "h")
+	if _, ok := nc.get("/x", 1, 1); ok {
+		t.Error("nil cache should always miss")
+	}
+	nc.save() // must not panic
+}
+
+func TestCacheSavePrunesDeleted(t *testing.T) {
+	dir := t.TempDir()
+	kept := filepath.Join(dir, "kept.jpg")
+	if err := os.WriteFile(kept, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := &hashCache{
+		file:    filepath.Join(dir, "cache.json"),
+		touched: map[string]bool{},
+		Entries: map[string]cacheEntry{
+			kept:                           {Size: 1, Mtime: 1, Hash: "aa"},
+			filepath.Join(dir, "gone.jpg"): {Size: 2, Mtime: 2, Hash: "bb"},
+		},
+	}
+	c.save()
+
+	loaded := &hashCache{Entries: map[string]cacheEntry{}}
+	data, err := os.ReadFile(c.file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, loaded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.Entries[kept]; !ok {
+		t.Error("existing file's entry should survive save")
+	}
+	if len(loaded.Entries) != 1 {
+		t.Errorf("entries after prune = %d, want 1", len(loaded.Entries))
+	}
+}
+
+func TestFindDuplicatesUsesCache(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) *fileEntry {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &fileEntry{path: path, ext: filepath.Ext(name), size: info.Size(), mtime: info.ModTime().UnixNano()}
+	}
+	a := write("a.jpg", "same-bytes")
+	b := write("b.jpg", "same-bytes")
+
+	c := &hashCache{
+		file:    filepath.Join(dir, "cache.json"),
+		touched: map[string]bool{},
+		Entries: map[string]cacheEntry{},
+	}
+
+	// First run: both hashed, cache populated.
+	_, _, s1 := findDuplicates([]*fileEntry{a, b}, c, false)
+	if s1.hashed != 2 || s1.cached != 0 {
+		t.Fatalf("first run stats = %+v, want 2 hashed", s1)
+	}
+
+	// Second run: both served from cache, no reads.
+	a2 := &fileEntry{path: a.path, ext: a.ext, size: a.size, mtime: a.mtime}
+	b2 := &fileEntry{path: b.path, ext: b.ext, size: b.size, mtime: b.mtime}
+	groups, _, s2 := findDuplicates([]*fileEntry{a2, b2}, c, false)
+	if s2.hashed != 0 || s2.cached != 2 {
+		t.Errorf("second run stats = %+v, want 2 cached", s2)
+	}
+	if len(groups) != 1 || !b2.dup {
+		t.Error("cached hashes should still produce the duplicate group")
+	}
+
+	// -verify ignores the cache and re-hashes.
+	a3 := &fileEntry{path: a.path, ext: a.ext, size: a.size, mtime: a.mtime}
+	b3 := &fileEntry{path: b.path, ext: b.ext, size: b.size, mtime: b.mtime}
+	_, _, s3 := findDuplicates([]*fileEntry{a3, b3}, c, true)
+	if s3.hashed != 2 || s3.cached != 0 {
+		t.Errorf("verify run stats = %+v, want 2 hashed", s3)
 	}
 }

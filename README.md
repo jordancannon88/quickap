@@ -167,6 +167,8 @@ command**; the bare `quickap` command indexes and reports only.
 | `-delete`   | category cmds  | **Permanently delete** duplicate files, keeping each group's original. No undo. Cannot be combined with `-move`.            |
 | `-ignore DIR` | all          | Skip a directory while scanning. A bare name (`node_modules`) skips every directory with that name; a path (`files/cache`) skips that path relative to the current directory. Repeat the flag or comma-separate for multiple: `-ignore tunes,media -ignore dist`. |
 | `-hidden`   | all            | Include hidden directories (`.foo/`) in the scan. Skipped by default.                                                       |
+| `-no-cache` | all            | Disable the hash cache for this run (no reads from or writes to it).                                                        |
+| `-verify`   | all            | Re-hash every duplicate candidate, ignoring cached hashes (the cache is still updated with the fresh results).              |
 | `-version`  | all            | Print the version and exit.                                                                                                 |
 | `-help`     | all            | Show help for the current command.                                                                                          |
 
@@ -179,6 +181,14 @@ writes to `../dupes/images/group-001/`.
 - Files are grouped by byte size first; only same-size candidates are hashed
   (SHA-256, in parallel across CPU cores), so unique-sized files are never
   read and scans stay fast on large trees.
+- **Hashes are cached between runs** (per scan directory, under the user
+  cache dir, e.g. `~/.cache/quickap/`). A cached hash is reused when the
+  file's size and mtime are unchanged, so repeat scans only read new or
+  modified files — on a mostly-static library, the second run drops from
+  "read every duplicate candidate" to near walk speed. The footer shows the
+  split (`12 hashed, 240 from cache`). Deleted files are pruned from the
+  cache automatically; `-verify` forces a full re-hash if you suspect
+  mtime-preserving changes, and `-no-cache` bypasses the cache entirely.
 - **Duplicates are byte-identical files**, regardless of filename or
   extension — the same bytes saved as `movie.mp4` and `movie-copy.mkv` are
   caught. Similar-looking but re-encoded/resized files are *not* flagged.
