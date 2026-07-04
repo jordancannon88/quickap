@@ -74,7 +74,9 @@ built automatically by the release workflow:
 | `quickap-windows-amd64.exe`   | Windows, x86-64                 |
 
 Each release also includes a `checksums.txt` with the SHA-256 of every
-binary.
+binary, signed keylessly with [cosign](https://docs.sigstore.dev/)
+(`checksums.txt.sig` + `checksums.txt.pem`) by the release workflow's
+GitHub OIDC identity.
 
 ```sh
 # example: Linux x86-64
@@ -89,6 +91,24 @@ To verify a download:
 curl -sLO https://github.com/jordancannon88/quickap/releases/latest/download/checksums.txt
 sha256sum -c checksums.txt --ignore-missing   # macOS: shasum -a 256 -c
 ```
+
+To additionally verify the checksums file is authentic (requires
+[cosign](https://docs.sigstore.dev/cosign/system_config/installation/)):
+
+```sh
+base=https://github.com/jordancannon88/quickap/releases/latest/download
+curl -sLO $base/checksums.txt.sig
+curl -sLO $base/checksums.txt.pem
+cosign verify-blob \
+  --certificate checksums.txt.pem \
+  --signature checksums.txt.sig \
+  --certificate-identity-regexp 'https://github\.com/jordancannon88/quickap/\.github/workflows/release\.yml@refs/tags/v.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+```
+
+This proves the checksums file was produced by this repository's release
+workflow, not by someone who merely obtained upload access.
 
 macOS note: binaries downloaded via browser get quarantined by Gatekeeper —
 clear it with `xattr -d com.apple.quarantine ./quickap`. The binaries are
@@ -119,7 +139,8 @@ GitHub Actions runs vet, tests, and a build on every push and pull request
 (`.github/workflows/ci.yml`). Pushing a tag matching `v*` (e.g. `v1.0.0`)
 runs the release workflow (`.github/workflows/release.yml`), which builds
 the five platform binaries above and publishes them as a GitHub release
-with a per-commit changelog and a `checksums.txt` of SHA-256 sums.
+with a per-commit changelog and a cosign-signed `checksums.txt` of
+SHA-256 sums.
 
 ## Usage
 
