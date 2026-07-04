@@ -20,7 +20,9 @@ import (
 	"unicode/utf8"
 )
 
-const version = "1.0.0"
+// version is stamped at build time by the release workflow
+// (-ldflags "-X main.version=..."); local builds report "dev".
+var version = "dev"
 
 type category struct {
 	cmd      string // subcommand name, e.g. "docs"

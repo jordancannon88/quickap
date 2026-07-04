@@ -36,7 +36,8 @@ jobs:
             if [ "$goos" = "windows" ]; then ext=".exe"; fi
             echo "building $goos/$goarch"
             GOOS=$goos GOARCH=$goarch CGO_ENABLED=0 \
-              go build -trimpath -ldflags="-s -w" \
+              go build -trimpath \
+              -ldflags="-s -w -X main.version=${GITHUB_REF_NAME#v}" \
               -o "dist/quickap-${goos}-${goarch}${ext}" .
           done
           ls -la dist/
