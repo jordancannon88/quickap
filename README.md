@@ -11,24 +11,7 @@ per-extension stats, and duplicates — with a clean, colorful terminal UI.
 
 The bare command gives a compact overview of every category:
 
-```
-  ◆ quickap · file index
-  /home/jordan/stuff
-
-  category       files       size   uniq   dup   reclaimable
-  Images            24     1.6 MB     20     4      140.6 KB
-  Documents          9   419.9 KB      7     2       63.5 KB
-  Music              8     2.0 MB      6     2      664.1 KB
-  Videos             3     1.8 MB      2     1      781.2 KB
-  Archives           2   341.8 KB      2     –             –
-  Applications       2   781.2 KB      1     1      390.6 KB
-  ──────────────────────────────────────────────────────────
-  Total             48     6.9 MB     38    10        2.0 MB
-
-  run "quickap <category>" for per-extension detail — e.g. quickap images
-
-  scanned in 6ms
-```
+<img src="assets/screenshot.svg" alt="quickap overview output: a table of Images, Documents, Music, Videos, Archives, and Applications with file counts, sizes, unique/duplicate counts, and reclaimable space" width="680">
 
 A category command gives the detailed view — summary box, reclaimable space,
 and a per-extension breakdown with two-tone bars (cyan unique, yellow
