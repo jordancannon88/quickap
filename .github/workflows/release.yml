@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history for the changelog
 
       - uses: actions/setup-go@v5
         with:
@@ -42,6 +44,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Changelog: one bullet per commit since the previous tag; full
+          # SHAs are auto-linked (and shortened) by GitHub.
+          prev=$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)
+          if [ -n "$prev" ]; then
+            range="$prev..$GITHUB_REF_NAME"
+          else
+            range="$GITHUB_REF_NAME"
+          fi
+          {
+            echo "## Changelog"
+            echo
+            git log --no-merges --format='* %H %s' "$range"
+          } > notes.md
           gh release create "$GITHUB_REF_NAME" dist/* \
             --title "$GITHUB_REF_NAME" \
-            --generate-notes
+            --notes-file notes.md

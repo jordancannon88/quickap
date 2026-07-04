@@ -1,5 +1,7 @@
 # quickap
 
+[![CI](https://github.com/jordancannon88/quickap/actions/workflows/ci.yml/badge.svg)](https://github.com/jordancannon88/quickap/actions/workflows/ci.yml)
+
 > [!NOTE]
 > AI (Claude Code) was used to help write the code in this project.
 
