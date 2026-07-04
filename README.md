@@ -1,25 +1,39 @@
 # quickap
 
+**A fast, zero-dependency CLI for finding out what's in a directory — and
+what's in it twice.**
+
 [![CI](https://github.com/jordancannon88/quickap/actions/workflows/ci.yml/badge.svg)](https://github.com/jordancannon88/quickap/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/jordancannon88/quickap)](https://github.com/jordancannon88/quickap/releases/latest)
+
+quickap indexes **images · documents · music · videos · archives ·
+applications** under the current directory and reports totals,
+per-extension stats, and duplicates — in a clean, colorful terminal UI.
+
+- 🔍 **Index** six file categories in one recursive scan
+- 👯 **Find duplicates** by content (SHA-256), whatever the file is named
+- 🧹 **Clean up** — list, move for manual sorting, or delete duplicates
+- 📦 **Single binary** — no runtime, no config, Linux/macOS/Windows
 
 > [!NOTE]
-> AI (Claude Code) was used to help write the code in this project.
+> AI was used to help write the code in this project.
 
-A fast, zero-dependency CLI that indexes images, documents, music, videos,
-archives, and applications under the current directory and reports totals,
-per-extension stats, and duplicates — with a clean, colorful terminal UI.
+> [!TIP]
+> Beyond this README, the [project wiki](https://github.com/jordancannon88/quickap/wiki)
+> covers the release process, verifying downloads, and the development
+> workflow.
 
-For extra help beyond this README — the release process, verifying
-downloads, and the development workflow — see the
-[project wiki](https://github.com/jordancannon88/quickap/wiki).
+## At a glance
 
-The bare command gives a compact overview of every category:
+Running `quickap` with no arguments gives a compact overview of every
+category:
 
 <img src="assets/screenshot.svg" alt="quickap overview output: a table of Images, Documents, Music, Videos, Archives, and Applications with file counts, sizes, unique/duplicate counts, and reclaimable space" width="680">
 
-A category command gives the detailed view — summary box, reclaimable space,
-and a per-extension breakdown with two-tone bars (cyan unique, yellow
-duplicate):
+A category command — here `quickap videos` — gives the detailed view:
+a summary box, reclaimable space, and a per-extension breakdown with
+two-tone bars (cyan unique, yellow duplicate):
 
 <img src="assets/screenshot-detail.svg" alt="quickap videos output: a summary box showing 3 videos, 2 unique, 1 duplicate with 781.2 KB reclaimable, and a per-extension table for .mkv, .mp4, and .webm with two-tone bar charts" width="600">
 
