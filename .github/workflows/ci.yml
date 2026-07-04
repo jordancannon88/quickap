@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
 
 jobs:
@@ -22,4 +22,5 @@ jobs:
         run: go test ./...
 
       - name: Build
+        if: github.ref != 'refs/heads/dev'
         run: go build -o quickap .

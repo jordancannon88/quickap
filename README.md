@@ -9,53 +9,19 @@ A fast, zero-dependency CLI that indexes images, documents, music, videos,
 archives, and applications under the current directory and reports totals,
 per-extension stats, and duplicates — with a clean, colorful terminal UI.
 
+For extra help beyond this README — the release process, verifying
+downloads, and the development workflow — see the
+[project wiki](https://github.com/jordancannon88/quickap/wiki).
+
 The bare command gives a compact overview of every category:
 
-```
-  ◆ quickap · file index
-  /home/jordan/stuff
-
-  category       files       size   uniq   dup   reclaimable
-  Images            24     1.6 MB     20     4      140.6 KB
-  Documents          9   419.9 KB      7     2       63.5 KB
-  Music              8     2.0 MB      6     2      664.1 KB
-  Videos             3     1.8 MB      2     1      781.2 KB
-  Archives           2   341.8 KB      2     –             –
-  Applications       2   781.2 KB      1     1      390.6 KB
-  ──────────────────────────────────────────────────────────
-  Total             48     6.9 MB     38    10        2.0 MB
-
-  run "quickap <category>" for per-extension detail — e.g. quickap images
-
-  scanned in 6ms
-```
+<img src="assets/screenshot.svg" alt="quickap overview output: a table of Images, Documents, Music, Videos, Archives, and Applications with file counts, sizes, unique/duplicate counts, and reclaimable space" width="680">
 
 A category command gives the detailed view — summary box, reclaimable space,
 and a per-extension breakdown with two-tone bars (cyan unique, yellow
 duplicate):
 
-```
-  ◆ quickap · file index
-  /home/jordan/stuff
-
-  Videos
-
-  ┌────────────────────────────────────────────┐
-  │  All videos               3        1.8 MB  │
-  │  Unique videos            2        1.0 MB  │
-  │  Duplicates               1      781.2 KB  │
-  └────────────────────────────────────────────┘
-  781.2 KB reclaimable by removing duplicates
-
-  By extension
-            all   uniq   dup                                size
-  .mkv        1      1     –  ████████████████████████  781.2 KB
-  .mp4        1      0     1  ████████████████████████  781.2 KB
-  .webm       1      1     –  ████████████████████████  293.0 KB
-  bar: █ unique  █ duplicate
-
-  scanned in 2ms
-```
+<img src="assets/screenshot-detail.svg" alt="quickap videos output: a summary box showing 3 videos, 2 unique, 1 duplicate with 781.2 KB reclaimable, and a per-extension table for .mkv, .mp4, and .webm with two-tone bar charts" width="600">
 
 ## Install
 
@@ -73,12 +39,42 @@ built automatically by the release workflow:
 | `quickap-darwin-amd64`        | macOS, Intel                    |
 | `quickap-windows-amd64.exe`   | Windows, x86-64                 |
 
+Each release also includes a `checksums.txt` with the SHA-256 of every
+binary, signed keylessly with [cosign](https://docs.sigstore.dev/)
+(`checksums.txt.sig` + `checksums.txt.pem`) by the release workflow's
+GitHub OIDC identity.
+
 ```sh
 # example: Linux x86-64
 curl -sLo quickap https://github.com/jordancannon88/quickap/releases/latest/download/quickap-linux-amd64
 chmod +x quickap
 mv quickap ~/.local/bin/   # or anywhere on your PATH
 ```
+
+To verify a download:
+
+```sh
+curl -sLO https://github.com/jordancannon88/quickap/releases/latest/download/checksums.txt
+sha256sum -c checksums.txt --ignore-missing   # macOS: shasum -a 256 -c
+```
+
+To additionally verify the checksums file is authentic (requires
+[cosign](https://docs.sigstore.dev/cosign/system_config/installation/)):
+
+```sh
+base=https://github.com/jordancannon88/quickap/releases/latest/download
+curl -sLO $base/checksums.txt.sig
+curl -sLO $base/checksums.txt.pem
+cosign verify-blob \
+  --certificate checksums.txt.pem \
+  --signature checksums.txt.sig \
+  --certificate-identity-regexp 'https://github\.com/jordancannon88/quickap/\.github/workflows/release\.yml@refs/tags/v.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+```
+
+This proves the checksums file was produced by this repository's release
+workflow, not by someone who merely obtained upload access.
 
 macOS note: binaries downloaded via browser get quarantined by Gatekeeper —
 clear it with `xattr -d com.apple.quarantine ./quickap`. The binaries are
@@ -109,7 +105,8 @@ GitHub Actions runs vet, tests, and a build on every push and pull request
 (`.github/workflows/ci.yml`). Pushing a tag matching `v*` (e.g. `v1.0.0`)
 runs the release workflow (`.github/workflows/release.yml`), which builds
 the five platform binaries above and publishes them as a GitHub release
-with generated notes.
+with a per-commit changelog and a cosign-signed `checksums.txt` of
+SHA-256 sums.
 
 ## Usage
 
