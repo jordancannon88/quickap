@@ -1,5 +1,8 @@
 # quickap
 
+> [!NOTE]
+> AI (Claude Code) was used to help write the code in this project.
+
 A fast, zero-dependency CLI that indexes images, documents, music, videos,
 archives, and applications under the current directory and reports totals,
 per-extension stats, and duplicates — with a clean, colorful terminal UI.
