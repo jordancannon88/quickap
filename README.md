@@ -9,6 +9,10 @@ A fast, zero-dependency CLI that indexes images, documents, music, videos,
 archives, and applications under the current directory and reports totals,
 per-extension stats, and duplicates — with a clean, colorful terminal UI.
 
+For extra help beyond this README — the release process, verifying
+downloads, and the development workflow — see the
+[project wiki](https://github.com/jordancannon88/quickap/wiki).
+
 The bare command gives a compact overview of every category:
 
 <img src="assets/screenshot.svg" alt="quickap overview output: a table of Images, Documents, Music, Videos, Archives, and Applications with file counts, sizes, unique/duplicate counts, and reclaimable space" width="680">
