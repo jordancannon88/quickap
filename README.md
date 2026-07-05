@@ -1,26 +1,33 @@
 # quickap
 
-> [!NOTE]
-> AI was used to help write the code in this project.
-
-**quickap** — pronounced *quick-cap* — takes its name from **quick
-capture**: a quick capture of everything in a directory.
-
-**A fast, zero-dependency CLI for finding out what's in a directory — and
-what's in it twice.**
-
 [![CI](https://github.com/jordancannon88/quickap/actions/workflows/ci.yml/badge.svg)](https://github.com/jordancannon88/quickap/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/jordancannon88/quickap)](https://github.com/jordancannon88/quickap/releases/latest)
 
+<div align="center">
+
+### ⚡ **quick**ap = **quick cap**ture ⚡
+
+*Say it "quick cap."*
+<br>
+One quick capture of everything in a directory.
+
+</div>
+
+**A fast, zero-dependency CLI for finding out what's in a directory — and
+what's in it twice.**
+
+> [!NOTE]
+> AI was used to help write the code in this project.
+
 quickap indexes **images · documents · music · videos · archives ·
-applications** under the current directory and reports totals,
-per-extension stats, and duplicates — in a clean, colorful terminal UI.
+applications** under any directory and reports totals, per-extension
+stats, and duplicates — in a clean, colorful terminal UI.
 
 - 🔍 **Index** six file categories in one recursive scan
 - 👯 **Find duplicates** by content (SHA-256), whatever the file is named
 - 🧹 **Clean up** — list, move for manual sorting, or delete duplicates
-- 📦 **Single binary** — no runtime, no config, Linux/macOS/Windows
+- 📦 **Single binary** — no runtime, no config, Linux/BSD/macOS/Windows
 
 > [!TIP]
 > Beyond this README, the [project wiki](https://github.com/jordancannon88/quickap/wiki)
@@ -40,6 +47,11 @@ with two-tone bars (cyan unique, yellow duplicate):
 
 <img src="assets/screenshot-detail.svg" alt="quickap videos output: a summary table showing 3 videos, 2 unique, 1 duplicate, a reclaimable-space meter at 42%, and a per-extension table for .mkv, .mp4, and .webm with two-tone bar charts" width="780">
 
+*Both images are generated from real program output: colored terminal
+captures rendered to SVG by [`assets/ansi2svg.py`](assets/ansi2svg.py)
+(`script -qec "quickap" /dev/null | python3 assets/ansi2svg.py /dev/stdin`),
+so what you see is exactly what the tool prints.*
+
 ## Features
 
 - User-friendly, colorful output — auto-disables when piped or with `NO_COLOR`
@@ -51,10 +63,11 @@ with two-tone bars (cyan unique, yellow duplicate):
 - Hash cache: repeat scans only read new or modified files
 - Clean up duplicates your way: `-list` to review, `-move` into per-group
   folders for manual sorting, or `-delete` keeping each original
-- Scoped scans: `-ignore` directories by name or path, opt into hidden
-  directories with `-hidden`
-- Single static binary for Linux, macOS, and Windows — no runtime, no
-  config, no dependencies
+- Scoped scans: point it at any directory (`quickap images ~/Pictures`),
+  `-ignore` directories by name or path, opt into hidden directories
+  with `-hidden`
+- Single static binary for Linux, the BSDs, macOS, and Windows — no
+  runtime, no config, no dependencies
 - Signed releases: SHA-256 checksums with keyless cosign signatures
 
 ## Install
@@ -69,6 +82,11 @@ built automatically by the release workflow:
 | ----------------------------- | --------------------------------|
 | `quickap-linux-amd64`         | Linux, x86-64                   |
 | `quickap-linux-arm64`         | Linux, ARM64                    |
+| `quickap-freebsd-amd64`       | FreeBSD, x86-64                 |
+| `quickap-freebsd-arm64`       | FreeBSD, ARM64                  |
+| `quickap-openbsd-amd64`       | OpenBSD, x86-64                 |
+| `quickap-netbsd-amd64`        | NetBSD, x86-64                  |
+| `quickap-dragonfly-amd64`     | DragonFly BSD, x86-64           |
 | `quickap-darwin-arm64`        | macOS, Apple Silicon (M-series) |
 | `quickap-darwin-amd64`        | macOS, Intel                    |
 | `quickap-windows-amd64.exe`   | Windows, x86-64                 |
@@ -138,17 +156,19 @@ GOOS=windows GOARCH=amd64 go build -o quickap-windows-amd64.exe .
 GitHub Actions runs vet, tests, and a build on every push and pull request
 (`.github/workflows/ci.yml`). Pushing a tag matching `v*` (e.g. `v1.0.0`)
 runs the release workflow (`.github/workflows/release.yml`), which builds
-the five platform binaries above and publishes them as a GitHub release
+the platform binaries above and publishes them as a GitHub release
 with a per-commit changelog and a cosign-signed `checksums.txt` of
 SHA-256 sums.
 
 ## Usage
 
 ```sh
-quickap [command] [flags]
+quickap [command] [flags] [directory]
 
-quickap                   # overview of all categories
+quickap                   # overview of all categories, current directory
+quickap ~/Pictures        # ... of another directory
 quickap images            # detailed image report
+quickap images ~/Pictures # ... for another directory
 quickap docs -list        # document report + duplicate groups
 quickap music -move DIR   # move music duplicate groups into DIR for sorting
 quickap videos -delete    # delete video duplicates, keeping originals
@@ -158,6 +178,10 @@ quickap help              # full help, including per-command flags
 quickap help docs         # help for one command (also: quickap docs -help)
 quickap version           # print version (also: -version)
 ```
+
+The directory to scan defaults to the current one; pass a different one as
+the **last** argument (after any flags). Relative `-move` and `-ignore`
+paths resolve against the scanned directory.
 
 ### Commands
 
@@ -183,12 +207,13 @@ command**; the bare `quickap` command indexes and reports only.
 | Flag        | Commands       | Description                                                                                                                 |
 | ----------- | -------------- | --------------------------------------------------------------------------------------------------------------------------|
 | `-list`     | all            | List each duplicate group with file paths. The kept original is marked `✓`, duplicates `✗`.                                 |
-| `-move DIR` | category cmds  | Move each duplicate group — **original and copies** — into `DIR/<category>/group-NNN/` for manual side-by-side sorting. `DIR` is created if needed and resolved relative to the current directory. |
+| `-move DIR` | category cmds  | Move each duplicate group — **original and copies** — into `DIR/<category>/group-NNN/` for manual side-by-side sorting. `DIR` is created if needed and resolved relative to the scanned directory. |
 | `-delete`   | category cmds  | **Permanently delete** duplicate files, keeping each group's original. No undo. Cannot be combined with `-move`.            |
-| `-ignore DIR` | all          | Skip a directory while scanning. A bare name (`node_modules`) skips every directory with that name; a path (`files/cache`) skips that path relative to the current directory. Repeat the flag or comma-separate for multiple: `-ignore tunes,media -ignore dist`. |
+| `-ignore DIR` | all          | Skip a directory while scanning. A bare name (`node_modules`) skips every directory with that name; a path (`files/cache`) skips that path relative to the scanned directory. Repeat the flag or comma-separate for multiple: `-ignore tunes,media -ignore dist`. |
 | `-hidden`   | all            | Include hidden directories (`.foo/`) in the scan. Skipped by default.                                                       |
 | `-no-cache` | all            | Disable the hash cache for this run (no reads from or writes to it).                                                        |
 | `-verify`   | all            | Re-hash every duplicate candidate, ignoring cached hashes (the cache is still updated with the fresh results).              |
+| `-clear-cache` | all         | Delete the hash cache entirely and exit; the next scan re-hashes from scratch.                                              |
 | `-spacious` | all            | Add vertical space between table rows for easier reading. Default is compact.                                               |
 | `-verbose` / `-vv` | all     | Show scan details below the report: timing, hash-cache stats (`12 hashed, 240 from cache`), and hints. Off by default.      |
 | `-version`  | all            | Print the version and exit.                                                                                                 |
@@ -200,10 +225,9 @@ command**; the bare `quickap` command indexes and reports only.
 that looks bloated:
 
 ```sh
-cd ~/Pictures
-quickap                      # all categories, compact table
-quickap images               # per-extension detail for images
-quickap images -verbose      # ... plus scan timing and cache stats
+quickap ~/Pictures                    # all categories, compact table
+quickap images ~/Pictures             # per-extension detail for images
+quickap images -verbose ~/Pictures    # ... plus scan timing and cache stats
 ```
 
 **Clean up a photo library, carefully.** Review what would be touched
@@ -291,14 +315,17 @@ Cached results are stored in your platform's user cache directory, under a
 | macOS    | `~/Library/Caches/quickap/`                          |
 | Windows  | `%LocalAppData%\quickap\`                            |
 
-Each scanned directory gets its own file, named after a hash of the
-directory's absolute path (e.g. `3c8b9a9aba9307ba.json`), containing a JSON
-map of `path → {size, mtime, sha256}` for every file that has been
-content-hashed. Nothing is ever written into the scanned directories
-themselves.
+All scans share a single `hashes.json`, a JSON map of `path → {size,
+mtime, sha256}` keyed by absolute file path for every file that has been
+content-hashed. Because entries are path-keyed rather than
+per-scan-directory, hashes carry across scan roots — scan a parent
+directory once and later scans of any subdirectory reuse its hashes
+instead of re-reading the files. Nothing is ever written into the scanned
+directories themselves.
 
-Cache housekeeping is automatic: entries for deleted files are pruned on
-each run, and a missing or corrupt cache file just means the next run
+Cache housekeeping is automatic: entries for files deleted under the
+scanned directory are pruned on each run (entries from other trees are
+left alone), and a missing or corrupt cache file just means the next run
 re-hashes everything. It's always safe to delete the cache directory —
 that's equivalent to a one-time `-no-cache` run. Use `-verify` to force a
 full re-hash if you suspect a file changed without its size or mtime
@@ -319,7 +346,8 @@ Extensions are matched case-insensitively.
 
 ## Notes
 
-- The scan is recursive from the current working directory.
+- The scan is recursive from the scanned directory (current directory by
+  default, or the one passed as the last argument).
 - The summary report always reflects the state **before** `-move`/`-delete`.
 - `-move` keeps original filenames, suffixing collisions within a group
   (`a.jpg`, `a-2.jpg`), and falls back to copy+delete across filesystems.

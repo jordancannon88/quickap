@@ -196,6 +196,7 @@ func TestCacheSavePrunesDeleted(t *testing.T) {
 	}
 	c := &hashCache{
 		file:    filepath.Join(dir, "cache.json"),
+		root:    dir,
 		touched: map[string]bool{},
 		Entries: map[string]cacheEntry{
 			kept:                           {Size: 1, Mtime: 1, Hash: "aa"},
@@ -217,6 +218,40 @@ func TestCacheSavePrunesDeleted(t *testing.T) {
 	}
 	if len(loaded.Entries) != 1 {
 		t.Errorf("entries after prune = %d, want 1", len(loaded.Entries))
+	}
+}
+
+// Pruning is scoped to the scan root: a missing file outside the root
+// keeps its entry (it belongs to a different scanned tree), so scanning a
+// subdirectory can't evict hashes computed by a parent-directory scan.
+func TestCacheSavePruneScopedToRoot(t *testing.T) {
+	dir := t.TempDir()
+	inRootGone := filepath.Join(dir, "sub", "gone.jpg")
+	outside := filepath.Join(t.TempDir(), "elsewhere.jpg") // missing, different tree
+	c := &hashCache{
+		file:    filepath.Join(dir, "cache.json"),
+		root:    dir,
+		touched: map[string]bool{},
+		Entries: map[string]cacheEntry{
+			inRootGone: {Size: 1, Mtime: 1, Hash: "aa"},
+			outside:    {Size: 2, Mtime: 2, Hash: "bb"},
+		},
+	}
+	c.save()
+
+	loaded := &hashCache{Entries: map[string]cacheEntry{}}
+	data, err := os.ReadFile(c.file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, loaded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.Entries[inRootGone]; ok {
+		t.Error("missing file under root should be pruned")
+	}
+	if _, ok := loaded.Entries[outside]; !ok {
+		t.Error("missing file outside root must be kept — it belongs to another tree")
 	}
 }
 
