@@ -1,17 +1,24 @@
 # quickap
 
-> [!NOTE]
-> AI was used to help write the code in this project.
+[![CI](https://github.com/jordancannon88/quickap/actions/workflows/ci.yml/badge.svg)](https://github.com/jordancannon88/quickap/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/jordancannon88/quickap)](https://github.com/jordancannon88/quickap/releases/latest)
 
-**quickap** — pronounced *quick-cap* — takes its name from **quick
-capture**: a quick capture of everything in a directory.
+<div align="center">
+
+### ⚡ **quick**ap = **quick cap**ture ⚡
+
+*Say it "quick cap."*
+<br>
+One quick capture of everything in a directory.
+
+</div>
 
 **A fast, zero-dependency CLI for finding out what's in a directory — and
 what's in it twice.**
 
-[![CI](https://github.com/jordancannon88/quickap/actions/workflows/ci.yml/badge.svg)](https://github.com/jordancannon88/quickap/actions/workflows/ci.yml)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/jordancannon88/quickap)](https://github.com/jordancannon88/quickap/releases/latest)
+> [!NOTE]
+> AI was used to help write the code in this project.
 
 quickap indexes **images · documents · music · videos · archives ·
 applications** under any directory and reports totals, per-extension
