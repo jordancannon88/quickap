@@ -214,6 +214,9 @@ func main() {
 	fs.Var(&ignores, "ignore", "skip `DIR` while scanning; repeat or comma-separate for multiple")
 	noCache := fs.Bool("no-cache", false, "disable the hash cache for this run")
 	verify := fs.Bool("verify", false, "re-hash all duplicate candidates, ignoring cached hashes")
+	var verbose bool
+	fs.BoolVar(&verbose, "verbose", false, "show scan details (timing, hash-cache stats, hints)")
+	fs.BoolVar(&verbose, "vv", false, "shorthand for -verbose")
 	// -move and -delete act on one category, so they require a category
 	// command; the bare command indexes and reports only.
 	moveDir, deleteDups := new(string), new(bool)
@@ -294,9 +297,9 @@ func main() {
 	if len(results) == 1 {
 		renderSection(results[0].cat, results[0].stats, results[0].t)
 	} else {
-		renderOverview(results)
+		renderOverview(results, verbose)
 	}
-	renderFooter(skipped, elapsed, hs)
+	renderFooter(skipped, elapsed, hs, verbose)
 
 	if *listDups {
 		for _, r := range results {
@@ -701,7 +704,7 @@ func deleteGroups(root string, cat category, groups [][]*fileEntry) {
 
 // renderOverview prints the compact all-categories table used by the bare
 // command: one row per category plus a total.
-func renderOverview(results []catResult) {
+func renderOverview(results []catResult, verbose bool) {
 	fmt.Println()
 	row := func(label, files, size, uniq, dup, reclaim string) {
 		fmt.Printf("  %s%s%s%s%s%s\n",
@@ -737,8 +740,10 @@ func renderOverview(results []catResult) {
 	row(bold("Total"),
 		bold(cyan(fmt.Sprintf("%d", g.count))), bold(humanSize(g.size)),
 		bold(green(fmt.Sprintf("%d", g.uniq))), dupStr, reclaim)
-	fmt.Println()
-	fmt.Printf("  %s\n", dim("run \"quickap <category>\" for per-extension detail — e.g. quickap images"))
+	if verbose {
+		fmt.Println()
+		fmt.Printf("  %s\n", dim("run \"quickap <category>\" for per-extension detail — e.g. quickap images"))
+	}
 }
 
 // commandList returns the quoted category subcommand names for errors.
@@ -827,7 +832,17 @@ func renderSection(cat category, stats map[string]*extStat, t totals) {
 	}
 }
 
-func renderFooter(skipped int, elapsed time.Duration, hs hashStats) {
+func renderFooter(skipped int, elapsed time.Duration, hs hashStats, verbose bool) {
+	// Unreadable entries are surfaced even without -verbose — that's a
+	// warning, not detail.
+	if !verbose && skipped > 0 {
+		fmt.Printf("\n  %s\n\n", dim(fmt.Sprintf("%d entries unreadable", skipped)))
+		return
+	}
+	if !verbose {
+		fmt.Println()
+		return
+	}
 	unit := time.Millisecond
 	if elapsed < time.Millisecond {
 		unit = time.Microsecond
@@ -950,6 +965,8 @@ func printCommandBlock(c cmdHelp) {
 	h("  " + cyan("-no-cache") + "    disable the hash cache for this run")
 	h("  " + cyan("-verify") + "      re-hash all duplicate candidates, ignoring cached")
 	h("               hashes (the cache is still updated)")
+	h("  " + cyan("-verbose") + "     show scan details: timing, hash-cache stats, and")
+	h("               hints (shorthand: " + cyan("-vv") + ")")
 	h("  " + cyan("-version") + "     print version and exit")
 	h("  " + cyan("-help") + "        show help for this command")
 }
@@ -995,10 +1012,33 @@ func printHelp() {
 	h("  " + cyan("help [cmd]") + "   show this help, or help for one command")
 	h("  " + cyan("version") + "      print version")
 	fmt.Println()
-	for _, name := range []string{"", "images", "docs", "music", "videos", "archives", "apps"} {
-		printCommandBlock(cmdHelps[name])
-		fmt.Println()
-	}
+	h(bold("FLAGS"))
+	h("  Every command accepts these:")
+	fmt.Println()
+	h("  " + cyan("-list") + "        list duplicate groups with file paths")
+	h("  " + cyan("-ignore DIR") + "  skip a directory while scanning; a bare name")
+	h("               (node_modules) skips every dir with that name, a path")
+	h("               (files/cache) skips that path relative to the current")
+	h("               directory; repeat or comma-separate for multiple")
+	h("  " + cyan("-hidden") + "      include hidden directories (.foo/) in the scan")
+	h("  " + cyan("-no-cache") + "    disable the hash cache for this run")
+	h("  " + cyan("-verify") + "      re-hash all duplicate candidates, ignoring cached")
+	h("               hashes (the cache is still updated)")
+	h("  " + cyan("-verbose") + "     show scan details: timing, hash-cache stats, and")
+	h("               hints (shorthand: " + cyan("-vv") + ")")
+	h("  " + cyan("-version") + "     print version and exit")
+	h("  " + cyan("-help") + "        show help for the current command")
+	fmt.Println()
+	h("  The cleanup flags work on one category at a time, so they need a")
+	h("  category command — e.g. " + cyan("quickap images -delete") + ":")
+	fmt.Println()
+	h("  " + cyan("-move DIR") + "    move each duplicate group (original + copies) into")
+	h("               DIR/<category>/group-NNN/ for manual sorting; DIR is")
+	h("               created if needed, resolved relative to the current")
+	h("               directory")
+	h("  " + cyan("-delete") + "      " + red("permanently delete") + " duplicate files, keeping each")
+	h("               group's original; excludes -move")
+	fmt.Println()
 	h(bold("NOTES"))
 	h("  · duplicates are byte-identical files (SHA-256), regardless of name")
 	h("    or extension; the lexically first path counts as the original")

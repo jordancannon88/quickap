@@ -37,6 +37,23 @@ two-tone bars (cyan unique, yellow duplicate):
 
 <img src="assets/screenshot-detail.svg" alt="quickap videos output: a summary box showing 3 videos, 2 unique, 1 duplicate with 781.2 KB reclaimable, and a per-extension table for .mkv, .mp4, and .webm with two-tone bar charts" width="600">
 
+## Features
+
+- User-friendly, colorful output — auto-disables when piped or with `NO_COLOR`
+- Six file categories: images, documents, music, videos, archives, applications
+- Compact all-categories overview, or detailed per-extension reports with
+  two-tone unique/duplicate bars
+- Duplicate detection by content (SHA-256) — catches renamed and
+  re-extensioned copies, never false-flags same-size files
+- Hash cache: repeat scans only read new or modified files
+- Clean up duplicates your way: `-list` to review, `-move` into per-group
+  folders for manual sorting, or `-delete` keeping each original
+- Scoped scans: `-ignore` directories by name or path, opt into hidden
+  directories with `-hidden`
+- Single static binary for Linux, macOS, and Windows — no runtime, no
+  config, no dependencies
+- Signed releases: SHA-256 checksums with keyless cosign signatures
+
 ## Install
 
 ### Download a release
@@ -169,26 +186,86 @@ command**; the bare `quickap` command indexes and reports only.
 | `-hidden`   | all            | Include hidden directories (`.foo/`) in the scan. Skipped by default.                                                       |
 | `-no-cache` | all            | Disable the hash cache for this run (no reads from or writes to it).                                                        |
 | `-verify`   | all            | Re-hash every duplicate candidate, ignoring cached hashes (the cache is still updated with the fresh results).              |
+| `-verbose` / `-vv` | all     | Show scan details below the report: timing, hash-cache stats (`12 hashed, 240 from cache`), and hints. Off by default.      |
 | `-version`  | all            | Print the version and exit.                                                                                                 |
 | `-help`     | all            | Show help for the current command.                                                                                          |
 
-Commands and flags compose: `quickap docs -hidden -list -move ../dupes`.
-`-move` keeps categories separate — e.g. `quickap images -move ../dupes`
-writes to `../dupes/images/group-001/`.
+### Examples
+
+**Get the lay of the land.** Overview first, then drill into the category
+that looks bloated:
+
+```sh
+cd ~/Pictures
+quickap                      # all categories, compact table
+quickap images               # per-extension detail for images
+quickap images -verbose      # ... plus scan timing and cache stats
+```
+
+**Clean up a photo library, carefully.** Review what would be touched
+before changing anything:
+
+```sh
+quickap images -list                   # see every duplicate group; ✓ = kept
+quickap images -move ../photo-dupes    # move groups out for side-by-side review
+# ...inspect ../photo-dupes/images/group-001/ etc., keep what you want
+```
+
+**Clean up decisively.** When you trust the byte-identical guarantee and
+just want the space back:
+
+```sh
+quickap videos -list       # one last look
+quickap videos -delete     # remove duplicates, keep each group's original
+```
+
+**Scope the scan.** Skip build output and vendored code by name, a
+specific folder by path, or include hidden directories:
+
+```sh
+quickap -ignore node_modules,dist      # skip every dir with those names
+quickap docs -ignore files/archive     # skip only that path
+quickap images -hidden -ignore .git    # scan hidden dirs, but not .git
+```
+
+**Audit a Downloads folder.** Archives and installers accumulate copies
+like `setup(1).exe` — content hashing catches them regardless of name:
+
+```sh
+cd ~/Downloads
+quickap archives -list
+quickap apps -delete
+```
+
+**Combine freely.** Flags stack on any command:
+
+```sh
+quickap docs -hidden -list -move ../dupes -verbose
+quickap music -ignore samples,loops -delete
+```
+
+**Force a fresh look.** If you suspect files changed without their
+size/mtime changing, or want to time a cold scan:
+
+```sh
+quickap -verify        # re-hash everything, refresh the cache
+quickap -no-cache -vv  # ignore the cache entirely, show timing
+```
+
+Note that `-move` keeps categories separate — `quickap images -move
+../dupes` writes to `../dupes/images/group-001/`.
 
 ## How duplicate detection works
 
 - Files are grouped by byte size first; only same-size candidates are hashed
   (SHA-256, in parallel across CPU cores), so unique-sized files are never
   read and scans stay fast on large trees.
-- **Hashes are cached between runs** (per scan directory, under the user
-  cache dir, e.g. `~/.cache/quickap/`). A cached hash is reused when the
-  file's size and mtime are unchanged, so repeat scans only read new or
-  modified files — on a mostly-static library, the second run drops from
-  "read every duplicate candidate" to near walk speed. The footer shows the
-  split (`12 hashed, 240 from cache`). Deleted files are pruned from the
-  cache automatically; `-verify` forces a full re-hash if you suspect
-  mtime-preserving changes, and `-no-cache` bypasses the cache entirely.
+- **Hashes are cached between runs** (see [The hash cache](#the-hash-cache)
+  below). A cached hash is reused when the file's size and mtime are
+  unchanged, so repeat scans only read new or modified files — on a
+  mostly-static library, the second run drops from "read every duplicate
+  candidate" to near walk speed. Run with `-verbose` (`-vv`) to see the
+  split (`12 hashed, 240 from cache`) and scan timing.
 - **Duplicates are byte-identical files**, regardless of filename or
   extension — the same bytes saved as `movie.mp4` and `movie-copy.mkv` are
   caught. Similar-looking but re-encoded/resized files are *not* flagged.
@@ -198,6 +275,30 @@ writes to `../dupes/images/group-001/`.
   so a group of 3 identical files counts as 1 original + 2 duplicates.
   `-list` shows exactly which file each group keeps — review it before
   running `-delete`.
+
+### The hash cache
+
+Cached results are stored in your platform's user cache directory, under a
+`quickap` folder:
+
+| Platform | Location                                             |
+| -------- | -----------------------------------------------------|
+| Linux    | `~/.cache/quickap/` (or `$XDG_CACHE_HOME/quickap/`)  |
+| macOS    | `~/Library/Caches/quickap/`                          |
+| Windows  | `%LocalAppData%\quickap\`                            |
+
+Each scanned directory gets its own file, named after a hash of the
+directory's absolute path (e.g. `3c8b9a9aba9307ba.json`), containing a JSON
+map of `path → {size, mtime, sha256}` for every file that has been
+content-hashed. Nothing is ever written into the scanned directories
+themselves.
+
+Cache housekeeping is automatic: entries for deleted files are pruned on
+each run, and a missing or corrupt cache file just means the next run
+re-hashes everything. It's always safe to delete the cache directory —
+that's equivalent to a one-time `-no-cache` run. Use `-verify` to force a
+full re-hash if you suspect a file changed without its size or mtime
+changing.
 
 ## Categories
 
