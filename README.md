@@ -29,13 +29,13 @@ per-extension stats, and duplicates — in a clean, colorful terminal UI.
 Running `quickap` with no arguments gives a compact overview of every
 category:
 
-<img src="assets/screenshot.svg" alt="quickap overview output: a table of Images, Documents, Music, Videos, Archives, and Applications with file counts, sizes, unique/duplicate counts, and reclaimable space" width="680">
+<img src="assets/screenshot.svg" alt="quickap overview output: a table of Images, Documents, Music, Videos, Archives, and Applications with file counts, sizes, unique/duplicate counts, and reclaimable space, plus a reclaimable-space meter" width="760">
 
 A category command — here `quickap videos` — gives the detailed view:
-a summary box, reclaimable space, and a per-extension breakdown with
-two-tone bars (cyan unique, yellow duplicate):
+a summary table, a reclaimable-space meter, and a per-extension breakdown
+with two-tone bars (cyan unique, yellow duplicate):
 
-<img src="assets/screenshot-detail.svg" alt="quickap videos output: a summary box showing 3 videos, 2 unique, 1 duplicate with 781.2 KB reclaimable, and a per-extension table for .mkv, .mp4, and .webm with two-tone bar charts" width="600">
+<img src="assets/screenshot-detail.svg" alt="quickap videos output: a summary table showing 3 videos, 2 unique, 1 duplicate, a reclaimable-space meter at 42%, and a per-extension table for .mkv, .mp4, and .webm with two-tone bar charts" width="780">
 
 ## Features
 
@@ -186,6 +186,7 @@ command**; the bare `quickap` command indexes and reports only.
 | `-hidden`   | all            | Include hidden directories (`.foo/`) in the scan. Skipped by default.                                                       |
 | `-no-cache` | all            | Disable the hash cache for this run (no reads from or writes to it).                                                        |
 | `-verify`   | all            | Re-hash every duplicate candidate, ignoring cached hashes (the cache is still updated with the fresh results).              |
+| `-spacious` | all            | Add vertical space between table rows for easier reading. Default is compact.                                               |
 | `-verbose` / `-vv` | all     | Show scan details below the report: timing, hash-cache stats (`12 hashed, 240 from cache`), and hints. Off by default.      |
 | `-version`  | all            | Print the version and exit.                                                                                                 |
 | `-help`     | all            | Show help for the current command.                                                                                          |
