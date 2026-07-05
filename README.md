@@ -47,6 +47,11 @@ with two-tone bars (cyan unique, yellow duplicate):
 
 <img src="assets/screenshot-detail.svg" alt="quickap videos output: a summary table showing 3 videos, 2 unique, 1 duplicate, a reclaimable-space meter at 42%, and a per-extension table for .mkv, .mp4, and .webm with two-tone bar charts" width="780">
 
+*Both images are generated from real program output: colored terminal
+captures rendered to SVG by [`assets/ansi2svg.py`](assets/ansi2svg.py)
+(`script -qec "quickap" /dev/null | python3 assets/ansi2svg.py /dev/stdin`),
+so what you see is exactly what the tool prints.*
+
 ## Features
 
 - User-friendly, colorful output — auto-disables when piped or with `NO_COLOR`
