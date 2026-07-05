@@ -20,7 +20,7 @@ stats, and duplicates — in a clean, colorful terminal UI.
 - 🔍 **Index** six file categories in one recursive scan
 - 👯 **Find duplicates** by content (SHA-256), whatever the file is named
 - 🧹 **Clean up** — list, move for manual sorting, or delete duplicates
-- 📦 **Single binary** — no runtime, no config, Linux/macOS/Windows
+- 📦 **Single binary** — no runtime, no config, Linux/BSD/macOS/Windows
 
 > [!TIP]
 > Beyond this README, the [project wiki](https://github.com/jordancannon88/quickap/wiki)
@@ -54,8 +54,8 @@ with two-tone bars (cyan unique, yellow duplicate):
 - Scoped scans: point it at any directory (`quickap images ~/Pictures`),
   `-ignore` directories by name or path, opt into hidden directories
   with `-hidden`
-- Single static binary for Linux, macOS, and Windows — no runtime, no
-  config, no dependencies
+- Single static binary for Linux, the BSDs, macOS, and Windows — no
+  runtime, no config, no dependencies
 - Signed releases: SHA-256 checksums with keyless cosign signatures
 
 ## Install
@@ -70,6 +70,11 @@ built automatically by the release workflow:
 | ----------------------------- | --------------------------------|
 | `quickap-linux-amd64`         | Linux, x86-64                   |
 | `quickap-linux-arm64`         | Linux, ARM64                    |
+| `quickap-freebsd-amd64`       | FreeBSD, x86-64                 |
+| `quickap-freebsd-arm64`       | FreeBSD, ARM64                  |
+| `quickap-openbsd-amd64`       | OpenBSD, x86-64                 |
+| `quickap-netbsd-amd64`        | NetBSD, x86-64                  |
+| `quickap-dragonfly-amd64`     | DragonFly BSD, x86-64           |
 | `quickap-darwin-arm64`        | macOS, Apple Silicon (M-series) |
 | `quickap-darwin-amd64`        | macOS, Intel                    |
 | `quickap-windows-amd64.exe`   | Windows, x86-64                 |
@@ -139,7 +144,7 @@ GOOS=windows GOARCH=amd64 go build -o quickap-windows-amd64.exe .
 GitHub Actions runs vet, tests, and a build on every push and pull request
 (`.github/workflows/ci.yml`). Pushing a tag matching `v*` (e.g. `v1.0.0`)
 runs the release workflow (`.github/workflows/release.yml`), which builds
-the five platform binaries above and publishes them as a GitHub release
+the platform binaries above and publishes them as a GitHub release
 with a per-commit changelog and a cosign-signed `checksums.txt` of
 SHA-256 sums.
 
