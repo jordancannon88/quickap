@@ -1,5 +1,8 @@
 # quickap
 
+> [!NOTE]
+> AI was used to help write the code in this project.
+
 **A fast, zero-dependency CLI for finding out what's in a directory — and
 what's in it twice.**
 
@@ -15,9 +18,6 @@ per-extension stats, and duplicates — in a clean, colorful terminal UI.
 - 👯 **Find duplicates** by content (SHA-256), whatever the file is named
 - 🧹 **Clean up** — list, move for manual sorting, or delete duplicates
 - 📦 **Single binary** — no runtime, no config, Linux/macOS/Windows
-
-> [!NOTE]
-> AI was used to help write the code in this project.
 
 > [!TIP]
 > Beyond this README, the [project wiki](https://github.com/jordancannon88/quickap/wiki)
