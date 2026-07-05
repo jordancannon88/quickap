@@ -3,6 +3,9 @@
 > [!NOTE]
 > AI was used to help write the code in this project.
 
+**quickap** — pronounced *quick-cap* — takes its name from **quick
+capture**: a quick capture of everything in a directory.
+
 **A fast, zero-dependency CLI for finding out what's in a directory — and
 what's in it twice.**
 
