@@ -196,6 +196,7 @@ command**; the bare `quickap` command indexes and reports only.
 | `-hidden`   | all            | Include hidden directories (`.foo/`) in the scan. Skipped by default.                                                       |
 | `-no-cache` | all            | Disable the hash cache for this run (no reads from or writes to it).                                                        |
 | `-verify`   | all            | Re-hash every duplicate candidate, ignoring cached hashes (the cache is still updated with the fresh results).              |
+| `-clear-cache` | all         | Delete the hash cache entirely and exit; the next scan re-hashes from scratch.                                              |
 | `-spacious` | all            | Add vertical space between table rows for easier reading. Default is compact.                                               |
 | `-verbose` / `-vv` | all     | Show scan details below the report: timing, hash-cache stats (`12 hashed, 240 from cache`), and hints. Off by default.      |
 | `-version`  | all            | Print the version and exit.                                                                                                 |

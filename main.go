@@ -272,6 +272,7 @@ func main() {
 	fs.Var(&ignores, "ignore", "skip `DIR` while scanning; repeat or comma-separate for multiple")
 	noCache := fs.Bool("no-cache", false, "disable the hash cache for this run")
 	verify := fs.Bool("verify", false, "re-hash all duplicate candidates, ignoring cached hashes")
+	clearCache := fs.Bool("clear-cache", false, "delete the hash cache and exit")
 	var verbose bool
 	fs.BoolVar(&verbose, "verbose", false, "show scan details (timing, hash-cache stats, hints)")
 	fs.BoolVar(&verbose, "vv", false, "shorthand for -verbose")
@@ -292,6 +293,10 @@ func main() {
 
 	if *showVersion {
 		fmt.Println("quickap " + version)
+		return
+	}
+	if *clearCache {
+		wipeCache()
 		return
 	}
 	if *deleteDups && *moveDir != "" {
@@ -691,6 +696,41 @@ func (c *hashCache) save() {
 type hashStats struct {
 	hashed int // files read and hashed this run
 	cached int // hashes reused from the cache
+}
+
+// wipeCache deletes the entire hash cache directory and reports what was
+// removed. The next scan simply re-hashes from scratch.
+func wipeCache() {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "quickap:", err)
+		os.Exit(1)
+	}
+	dir := filepath.Join(base, "quickap")
+	var files int
+	var size int64
+	filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			files++
+			size += info.Size()
+		}
+		return nil
+	})
+	fmt.Println()
+	if files == 0 {
+		fmt.Printf("  %s\n\n", dim("hash cache is already empty ("+dir+")"))
+		return
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		fmt.Fprintln(os.Stderr, "quickap:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("  %s %s %s\n\n", green("✔"),
+		green(fmt.Sprintf("cleared hash cache (%d files, %s)", files, humanSize(size))),
+		dim(dir))
 }
 
 func relPath(root, path string) string {
@@ -1127,6 +1167,8 @@ func printCommandBlock(c cmdHelp) {
 	h("  " + cyan("-no-cache") + "    disable the hash cache for this run")
 	h("  " + cyan("-verify") + "      re-hash all duplicate candidates, ignoring cached")
 	h("               hashes (the cache is still updated)")
+	h("  " + cyan("-clear-cache") + " delete the hash cache entirely and exit; the next")
+	h("               scan re-hashes from scratch")
 	h("  " + cyan("-spacious") + "    add vertical space between table rows for easier")
 	h("               reading (default is compact)")
 	h("  " + cyan("-verbose") + "     show scan details: timing, hash-cache stats, and")
@@ -1189,6 +1231,8 @@ func printHelp() {
 	h("  " + cyan("-no-cache") + "    disable the hash cache for this run")
 	h("  " + cyan("-verify") + "      re-hash all duplicate candidates, ignoring cached")
 	h("               hashes (the cache is still updated)")
+	h("  " + cyan("-clear-cache") + " delete the hash cache entirely and exit; the next")
+	h("               scan re-hashes from scratch")
 	h("  " + cyan("-spacious") + "    add vertical space between table rows for easier")
 	h("               reading (default is compact)")
 	h("  " + cyan("-verbose") + "     show scan details: timing, hash-cache stats, and")
