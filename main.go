@@ -6,6 +6,8 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -29,12 +31,13 @@ type category struct {
 	key      string // report/dir name, e.g. "documents"
 	label    string // section heading, e.g. "Documents"
 	singular string // used in labels, e.g. "document"
+	hue      int    // xterm-256 accent color
 	exts     map[string]bool
 }
 
 var categories = []category{
 	{
-		cmd: "images", key: "images", label: "Images", singular: "image",
+		cmd: "images", key: "images", label: "Images", singular: "image", hue: 80,
 		exts: map[string]bool{
 			".jpg": true, ".jpeg": true, ".png": true, ".gif": true,
 			".webp": true, ".bmp": true, ".svg": true, ".tiff": true,
@@ -43,7 +46,7 @@ var categories = []category{
 		},
 	},
 	{
-		cmd: "docs", key: "documents", label: "Documents", singular: "document",
+		cmd: "docs", key: "documents", label: "Documents", singular: "document", hue: 75,
 		exts: map[string]bool{
 			".pdf": true, ".doc": true, ".docx": true, ".xls": true,
 			".xlsx": true, ".ppt": true, ".pptx": true, ".odt": true,
@@ -52,7 +55,7 @@ var categories = []category{
 		},
 	},
 	{
-		cmd: "music", key: "music", label: "Music", singular: "music",
+		cmd: "music", key: "music", label: "Music", singular: "music", hue: 176,
 		exts: map[string]bool{
 			".mp3": true, ".flac": true, ".wav": true, ".aac": true,
 			".ogg": true, ".m4a": true, ".wma": true, ".opus": true,
@@ -60,7 +63,7 @@ var categories = []category{
 		},
 	},
 	{
-		cmd: "videos", key: "videos", label: "Videos", singular: "video",
+		cmd: "videos", key: "videos", label: "Videos", singular: "video", hue: 215,
 		exts: map[string]bool{
 			".mp4": true, ".mkv": true, ".avi": true, ".mov": true,
 			".wmv": true, ".flv": true, ".webm": true, ".m4v": true,
@@ -68,7 +71,7 @@ var categories = []category{
 		},
 	},
 	{
-		cmd: "archives", key: "archives", label: "Archives", singular: "archive",
+		cmd: "archives", key: "archives", label: "Archives", singular: "archive", hue: 179,
 		exts: map[string]bool{
 			".zip": true, ".7z": true, ".7zip": true, ".rar": true,
 			".tar": true, ".gz": true, ".bz2": true, ".xz": true,
@@ -76,7 +79,7 @@ var categories = []category{
 		},
 	},
 	{
-		cmd: "apps", key: "apps", label: "Applications", singular: "application",
+		cmd: "apps", key: "apps", label: "Applications", singular: "application", hue: 114,
 		exts: map[string]bool{
 			".exe": true, ".msi": true, ".dmg": true, ".pkg": true,
 			".deb": true, ".rpm": true, ".appimage": true, ".apk": true,
@@ -102,11 +105,12 @@ func categoryBySub(sub string) *category {
 }
 
 type fileEntry struct {
-	path string
-	ext  string
-	size int64
-	hash string // set only for files that share a size with another file
-	dup  bool
+	path  string
+	ext   string
+	size  int64
+	mtime int64  // UnixNano, for hash-cache validity
+	hash  string // set only for files that share a size with another file
+	dup   bool
 }
 
 type extStat struct {
@@ -151,13 +155,61 @@ func style(code, s string) string {
 	return "\x1b[" + code + "m" + s + "\x1b[0m"
 }
 
+// c256 colors s with an xterm-256 foreground color.
+func c256(n int, s string) string {
+	if !colorOn {
+		return s
+	}
+	return fmt.Sprintf("\x1b[38;5;%dm%s\x1b[0m", n, s)
+}
+
 func bold(s string) string    { return style("1", s) }
 func dim(s string) string     { return style("2", s) }
-func cyan(s string) string    { return style("36", s) }
-func green(s string) string   { return style("32", s) }
-func magenta(s string) string { return style("35", s) }
-func yellow(s string) string  { return style("33", s) }
-func red(s string) string     { return style("31", s) }
+func ital(s string) string    { return style("3", s) }
+func cyan(s string) string    { return c256(80, s) }
+func green(s string) string   { return c256(114, s) }
+func magenta(s string) string { return c256(176, s) }
+func yellow(s string) string  { return c256(179, s) }
+func red(s string) string     { return c256(203, s) }
+
+// Bordered-table helpers. Borders are dim so data stays in the foreground.
+
+// tLine draws a horizontal border, e.g. tLine("╭","┬","╮", w) or
+// tLine("├","┼","┤", w).
+func tLine(l, m, r string, widths []int) string {
+	parts := make([]string, len(widths))
+	for i, w := range widths {
+		parts[i] = strings.Repeat("─", w)
+	}
+	return "  " + dim(l+strings.Join(parts, m)+r)
+}
+
+// spacious switches tables from compact rows (default) to airy ones with
+// a blank row between line items; set by the -spacious flag.
+var spacious bool
+
+// tSpace draws an empty row — vertical breathing room between line items.
+func tSpace(widths []int) string {
+	cells := make([]string, len(widths))
+	return tRow(widths, strings.Repeat("l", len(widths)), cells...)
+}
+
+// tRow draws one table row; aligns holds 'l' or 'r' per column. Cells may
+// contain ANSI styling — widths are measured without escape codes.
+func tRow(widths []int, aligns string, cells ...string) string {
+	var b strings.Builder
+	b.WriteString("  " + dim("│"))
+	for i, cell := range cells {
+		w := widths[i] - 2
+		if aligns[i] == 'l' {
+			cell = padRight(cell, w)
+		} else {
+			cell = pad(cell, w)
+		}
+		b.WriteString(" " + cell + " " + dim("│"))
+	}
+	return b.String()
+}
 
 func humanSize(b int64) string {
 	const unit = 1024
@@ -209,6 +261,12 @@ func main() {
 	showVersion := fs.Bool("version", false, "print version and exit")
 	var ignores multiFlag
 	fs.Var(&ignores, "ignore", "skip `DIR` while scanning; repeat or comma-separate for multiple")
+	noCache := fs.Bool("no-cache", false, "disable the hash cache for this run")
+	verify := fs.Bool("verify", false, "re-hash all duplicate candidates, ignoring cached hashes")
+	var verbose bool
+	fs.BoolVar(&verbose, "verbose", false, "show scan details (timing, hash-cache stats, hints)")
+	fs.BoolVar(&verbose, "vv", false, "shorthand for -verbose")
+	fs.BoolVar(&spacious, "spacious", false, "add vertical space between table rows (default: compact)")
 	// -move and -delete act on one category, so they require a category
 	// command; the bare command indexes and reports only.
 	moveDir, deleteDups := new(string), new(bool)
@@ -241,11 +299,18 @@ func main() {
 	start := time.Now()
 	byCategory, skipped := scan(root, active, *hidden, ignores)
 
+	var cache *hashCache
+	if !*noCache {
+		cache = loadCache(root)
+	}
+	var hs hashStats
 	var results []catResult
 	for _, cat := range active {
 		entries := byCategory[cat.key]
-		groups, unreadable := findDuplicates(entries)
+		groups, unreadable, s := findDuplicates(entries, cache, *verify)
 		skipped += unreadable
+		hs.hashed += s.hashed
+		hs.cached += s.cached
 
 		stats := map[string]*extStat{}
 		var t totals
@@ -273,6 +338,7 @@ func main() {
 		}
 		results = append(results, catResult{cat, groups, stats, t})
 	}
+	cache.save()
 	elapsed := time.Since(start)
 
 	fmt.Println()
@@ -281,9 +347,9 @@ func main() {
 	if len(results) == 1 {
 		renderSection(results[0].cat, results[0].stats, results[0].t)
 	} else {
-		renderOverview(results)
+		renderOverview(results, verbose)
 	}
-	renderFooter(skipped, elapsed)
+	renderFooter(skipped, elapsed, hs, verbose)
 
 	if *listDups {
 		for _, r := range results {
@@ -373,7 +439,9 @@ func scan(root string, active []category, includeHidden bool, ignores []string) 
 				skipped++
 				return nil
 			}
-			byCategory[cat.key] = append(byCategory[cat.key], &fileEntry{path: path, ext: ext, size: info.Size()})
+			byCategory[cat.key] = append(byCategory[cat.key], &fileEntry{
+				path: path, ext: ext, size: info.Size(), mtime: info.ModTime().UnixNano(),
+			})
 			return nil
 		}
 		return nil
@@ -384,8 +452,9 @@ func scan(root string, active []category, includeHidden bool, ignores []string) 
 // findDuplicates hashes files that share a byte size, flags every file whose
 // content was already seen at a lexically earlier path, and returns the
 // identical-content groups (each sorted by path; the first file is treated as
-// the original). Files that cannot be read count as unique.
-func findDuplicates(entries []*fileEntry) ([][]*fileEntry, int) {
+// the original). Files that cannot be read count as unique. Hashes for
+// unchanged files are reused from cache unless verify is set.
+func findDuplicates(entries []*fileEntry, cache *hashCache, verify bool) ([][]*fileEntry, int, hashStats) {
 	bySize := map[int64][]*fileEntry{}
 	for _, e := range entries {
 		bySize[e.size] = append(bySize[e.size], e)
@@ -397,8 +466,9 @@ func findDuplicates(entries []*fileEntry) ([][]*fileEntry, int) {
 			candidates = append(candidates, group...)
 		}
 	}
+	var stats hashStats
 	if len(candidates) == 0 {
-		return nil, 0
+		return nil, 0, stats
 	}
 
 	var unreadable int
@@ -406,6 +476,13 @@ func findDuplicates(entries []*fileEntry) ([][]*fileEntry, int) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, runtime.NumCPU())
 	for _, e := range candidates {
+		if !verify {
+			if h, ok := cache.get(e.path, e.size, e.mtime); ok {
+				e.hash = h
+				stats.cached++
+				continue
+			}
+		}
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(e *fileEntry) {
@@ -419,6 +496,8 @@ func findDuplicates(entries []*fileEntry) ([][]*fileEntry, int) {
 				return
 			}
 			e.hash = h
+			cache.put(e.path, e.size, e.mtime, h)
+			stats.hashed++
 		}(e)
 	}
 	wg.Wait()
@@ -441,7 +520,7 @@ func findDuplicates(entries []*fileEntry) ([][]*fileEntry, int) {
 		groups = append(groups, group)
 	}
 	sort.Slice(groups, func(i, j int) bool { return groups[i][0].path < groups[j][0].path })
-	return groups, unreadable
+	return groups, unreadable, stats
 }
 
 func hashFile(path string) (string, error) {
@@ -454,7 +533,115 @@ func hashFile(path string) (string, error) {
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}
-	return string(h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// hashCache persists computed SHA-256 hashes between runs so unchanged
+// files (same size and mtime) are never re-read. One cache file per scan
+// root, under the user cache dir. A nil *hashCache is a valid no-op cache.
+// get/put are safe for concurrent use (lookups on the scan goroutine race
+// with puts from hash workers).
+type hashCache struct {
+	mu      sync.Mutex
+	file    string
+	dirty   bool
+	touched map[string]bool
+	Entries map[string]cacheEntry `json:"entries"`
+}
+
+type cacheEntry struct {
+	Size  int64  `json:"size"`
+	Mtime int64  `json:"mtime_ns"`
+	Hash  string `json:"sha256"`
+}
+
+func cacheFileFor(root string) (string, error) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(root))
+	return filepath.Join(dir, "quickap", hex.EncodeToString(sum[:8])+".json"), nil
+}
+
+// loadCache reads the cache for root, returning an empty cache on any
+// error (missing file, corrupt JSON) — the cache is an optimization only.
+func loadCache(root string) *hashCache {
+	file, err := cacheFileFor(root)
+	if err != nil {
+		return nil
+	}
+	c := &hashCache{file: file, touched: map[string]bool{}, Entries: map[string]cacheEntry{}}
+	data, err := os.ReadFile(file)
+	if err == nil {
+		if json.Unmarshal(data, c) != nil || c.Entries == nil {
+			c.Entries = map[string]cacheEntry{}
+		}
+	}
+	return c
+}
+
+// get returns the cached hash for path if size and mtime still match.
+func (c *hashCache) get(path string, size, mtime int64) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.Entries[path]
+	if !ok || e.Size != size || e.Mtime != mtime {
+		return "", false
+	}
+	c.touched[path] = true
+	return e.Hash, true
+}
+
+func (c *hashCache) put(path string, size, mtime int64, hash string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Entries[path] = cacheEntry{Size: size, Mtime: mtime, Hash: hash}
+	c.touched[path] = true
+	c.dirty = true
+}
+
+// save prunes entries whose files no longer exist and writes the cache
+// back if anything changed. Errors are ignored — worst case the next run
+// re-hashes.
+func (c *hashCache) save() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for path := range c.Entries {
+		if c.touched[path] {
+			continue
+		}
+		if _, err := os.Lstat(path); os.IsNotExist(err) {
+			delete(c.Entries, path)
+			c.dirty = true
+		}
+	}
+	if !c.dirty {
+		return
+	}
+	data, err := json.Marshal(c)
+	if err != nil {
+		return
+	}
+	if os.MkdirAll(filepath.Dir(c.file), 0o755) != nil {
+		return
+	}
+	os.WriteFile(c.file, data, 0o644)
+}
+
+// hashStats counts how duplicate-candidate hashes were obtained.
+type hashStats struct {
+	hashed int // files read and hashed this run
+	cached int // hashes reused from the cache
 }
 
 func relPath(root, path string) string {
@@ -468,7 +655,7 @@ func relPath(root, path string) string {
 // dir/<category>/group-NNN/, keeping original filenames (suffixed on
 // collision within a group).
 func moveGroups(root, dir string, cat category, groups [][]*fileEntry) error {
-	fmt.Printf("  %s\n", bold("Moving duplicate "+cat.singular+" groups"))
+	fmt.Printf("  %s %s\n", c256(cat.hue, "●"), bold("Moving duplicate "+cat.singular+" groups"))
 	if len(groups) == 0 {
 		fmt.Printf("  %s\n\n", dim("nothing to move — no duplicate "+cat.key+" found"))
 		return nil
@@ -480,15 +667,22 @@ func moveGroups(root, dir string, cat category, groups [][]*fileEntry) error {
 	var movedOrig, movedDup int
 	var movedSize int64
 	for i, group := range groups {
-		groupDir := filepath.Join(catDir, fmt.Sprintf("group-%03d", i+1))
+		groupName := fmt.Sprintf("group-%03d", i+1)
+		groupDir := filepath.Join(catDir, groupName)
 		if err := os.MkdirAll(groupDir, 0o755); err != nil {
 			return err
 		}
+		fmt.Printf("\n  %s %s\n", bold(groupName),
+			dim(fmt.Sprintf("· %d files → %s", len(group), relPath(root, groupDir))))
 		// Collision keys are lowercased so names differing only by case get
 		// suffixed too — on case-insensitive filesystems (macOS APFS) they
 		// would otherwise silently overwrite each other.
 		taken := map[string]bool{}
-		for _, e := range group {
+		for j, e := range group {
+			conn := dim("├")
+			if j == len(group)-1 {
+				conn = dim("╰")
+			}
 			name := filepath.Base(e.path)
 			for n := 2; taken[strings.ToLower(name)]; n++ {
 				ext := filepath.Ext(name)
@@ -497,7 +691,7 @@ func moveGroups(root, dir string, cat category, groups [][]*fileEntry) error {
 			taken[strings.ToLower(name)] = true
 			dst := filepath.Join(groupDir, name)
 			if err := moveFile(e.path, dst); err != nil {
-				fmt.Printf("    %s %s %s\n", red("!"), relPath(root, e.path), dim(err.Error()))
+				fmt.Printf("  %s %s %s %s\n", conn, red("!"), relPath(root, e.path), dim(err.Error()))
 				continue
 			}
 			if e.dup {
@@ -506,10 +700,10 @@ func moveGroups(root, dir string, cat category, groups [][]*fileEntry) error {
 				movedOrig++
 			}
 			movedSize += e.size
-			fmt.Printf("    %s %s %s %s\n", green("→"), relPath(root, e.path), dim("⇒"), relPath(root, dst))
+			fmt.Printf("  %s %s %s %s\n", conn, green("→"), relPath(root, e.path), dim("as "+name))
 		}
 	}
-	fmt.Printf("\n  %s %s\n\n",
+	fmt.Printf("\n  %s %s %s\n\n", green("✔"),
 		green(fmt.Sprintf("moved %d files (%s) into %s", movedOrig+movedDup, humanSize(movedSize), relPath(root, catDir))),
 		dim(fmt.Sprintf("· %d originals + %d duplicates", movedOrig, movedDup)))
 	return nil
@@ -543,7 +737,7 @@ func moveFile(src, dst string) error {
 // deleteGroups removes every duplicate file, keeping each group's original
 // (the lexically first path). Failures are logged and skipped.
 func deleteGroups(root string, cat category, groups [][]*fileEntry) {
-	fmt.Printf("  %s\n", bold("Deleting duplicate "+cat.key))
+	fmt.Printf("  %s %s\n", c256(cat.hue, "●"), bold("Deleting duplicate "+cat.key))
 	if len(groups) == 0 {
 		fmt.Printf("  %s\n\n", dim("nothing to delete — no duplicate "+cat.key+" found"))
 		return
@@ -551,38 +745,49 @@ func deleteGroups(root string, cat category, groups [][]*fileEntry) {
 	var deleted int
 	var freed int64
 	for _, group := range groups {
-		fmt.Printf("    %s %s %s\n", green("✓"), relPath(root, group[0].path), dim("(kept)"))
-		for _, e := range group[1:] {
+		fmt.Println()
+		fmt.Printf("  %s %s %s\n", dim("┌"), green("✓ "+relPath(root, group[0].path)), dim(ital("kept")))
+		for j, e := range group[1:] {
+			conn := dim("├")
+			if j == len(group)-2 {
+				conn = dim("╰")
+			}
 			if err := os.Remove(e.path); err != nil {
-				fmt.Printf("    %s %s %s\n", red("!"), relPath(root, e.path), dim(err.Error()))
+				fmt.Printf("  %s %s %s\n", conn, red("! "+relPath(root, e.path)), dim(err.Error()))
 				continue
 			}
 			deleted++
 			freed += e.size
-			fmt.Printf("    %s %s\n", red("✗"), relPath(root, e.path))
+			fmt.Printf("  %s %s %s\n", conn, red("✗ "+relPath(root, e.path)), dim(ital("deleted")))
 		}
 	}
-	fmt.Printf("\n  %s\n\n", green(fmt.Sprintf("deleted %d duplicate %s, freed %s", deleted, cat.key, humanSize(freed))))
+	fmt.Printf("\n  %s %s\n\n", green("✔"),
+		green(fmt.Sprintf("deleted %d duplicate %s, freed %s", deleted, cat.key, humanSize(freed))))
 }
 
 // renderOverview prints the compact all-categories table used by the bare
 // command: one row per category plus a total.
-func renderOverview(results []catResult) {
+func renderOverview(results []catResult, verbose bool) {
 	fmt.Println()
-	row := func(label, files, size, uniq, dup, reclaim string) {
-		fmt.Printf("  %s%s%s%s%s%s\n",
-			padRight(label, 14), pad(files, 6), pad(size, 11), pad(uniq, 7), pad(dup, 6), pad(reclaim, 14))
-	}
-	row(dim("category"), dim("files"), dim("size"), dim("uniq"), dim("dup"), dim("reclaimable"))
+	widths := []int{18, 9, 13, 10, 13, 15}
+	const aligns = "lrrrrr"
+	fmt.Println(tLine("╭", "┬", "╮", widths))
+	fmt.Println(tRow(widths, aligns,
+		dim("category"), dim("files"), dim("size"), dim("unique"), dim("duplicates"), dim("reclaimable")))
+	fmt.Println(tLine("├", "┼", "┤", widths))
 	var g totals
-	for _, r := range results {
+	for i, r := range results {
+		if spacious && i > 0 {
+			fmt.Println(tSpace(widths))
+		}
 		g.count += r.t.count
 		g.size += r.t.size
 		g.uniq += r.t.uniq
 		g.dup += r.t.dup
 		g.dupSize += r.t.dupSize
 		if r.t.count == 0 {
-			row(dim(r.cat.label), dim("0"), dim("–"), dim("–"), dim("–"), dim("–"))
+			fmt.Println(tRow(widths, aligns,
+				dim("○ "+r.cat.label), dim("0"), dim("–"), dim("–"), dim("–"), dim("–")))
 			continue
 		}
 		dupStr, reclaim := dim("–"), dim("–")
@@ -590,21 +795,53 @@ func renderOverview(results []catResult) {
 			dupStr = yellow(fmt.Sprintf("%d", r.t.dup))
 			reclaim = yellow(humanSize(r.t.dupSize))
 		}
-		row(r.cat.label,
+		fmt.Println(tRow(widths, aligns,
+			c256(r.cat.hue, "●")+" "+r.cat.label,
 			cyan(fmt.Sprintf("%d", r.t.count)), humanSize(r.t.size),
-			green(fmt.Sprintf("%d", r.t.uniq)), dupStr, reclaim)
+			green(fmt.Sprintf("%d", r.t.uniq)), dupStr, reclaim))
 	}
-	fmt.Printf("  %s\n", dim(strings.Repeat("─", 58)))
+	fmt.Println(tLine("├", "┼", "┤", widths))
 	dupStr, reclaim := dim("–"), dim("–")
 	if g.dup > 0 {
 		dupStr = bold(yellow(fmt.Sprintf("%d", g.dup)))
 		reclaim = bold(yellow(humanSize(g.dupSize)))
 	}
-	row(bold("Total"),
+	fmt.Println(tRow(widths, aligns,
+		bold("Total"),
 		bold(cyan(fmt.Sprintf("%d", g.count))), bold(humanSize(g.size)),
-		bold(green(fmt.Sprintf("%d", g.uniq))), dupStr, reclaim)
-	fmt.Println()
-	fmt.Printf("  %s\n", dim("run \"quickap <category>\" for per-extension detail — e.g. quickap images"))
+		bold(green(fmt.Sprintf("%d", g.uniq))), dupStr, reclaim))
+	fmt.Println(tLine("╰", "┴", "╯", widths))
+	if g.dup > 0 {
+		fmt.Println()
+		fmt.Println("  " + meter(g.dupSize, g.size))
+	}
+	if verbose {
+		fmt.Println()
+		fmt.Printf("  %s\n", dim(ital("run \"quickap <category>\" for per-extension detail — e.g. quickap images")))
+	}
+}
+
+// meter renders the reclaimable-space gauge: a 20-cell bar of the
+// duplicate share of total bytes, with the amounts spelled out.
+func meter(dupSize, total int64) string {
+	const cells = 24
+	filled := 0
+	if total > 0 {
+		filled = int(float64(dupSize)/float64(total)*cells + 0.5)
+	}
+	if filled < 1 && dupSize > 0 {
+		filled = 1
+	}
+	if filled > cells {
+		filled = cells
+	}
+	pct := 0.0
+	if total > 0 {
+		pct = float64(dupSize) / float64(total) * 100
+	}
+	return dim("reclaimable ") +
+		yellow(strings.Repeat("█", filled)) + dim(strings.Repeat("░", cells-filled)) +
+		" " + yellow(humanSize(dupSize)) + dim(fmt.Sprintf(" · %.0f%% of %s", pct, humanSize(total)))
 }
 
 // commandList returns the quoted category subcommand names for errors.
@@ -616,20 +853,17 @@ func commandList() string {
 	return strings.Join(names, ", ")
 }
 
-// renderSection prints one category's summary box and extension table.
+// renderSection prints one category's summary table, reclaimable meter,
+// and per-extension breakdown.
 func renderSection(cat category, stats map[string]*extStat, t totals) {
-	fmt.Printf("\n  %s\n\n", bold(cyan(cat.label)))
+	fmt.Printf("\n  %s %s\n\n", c256(cat.hue, "●"), bold(cat.label))
 
 	if t.count == 0 {
 		fmt.Printf("  %s\n", dim("no "+cat.singular+" files found"))
 		return
 	}
 
-	const inner = 44
-	boxRow := func(label, count, size string) string {
-		lbl := label + strings.Repeat(" ", 18-utf8.RuneCountInString(label))
-		return "  │  " + dim(lbl) + pad(count, 8) + pad(size, 14) + "  │"
-	}
+	sw := []int{20, 10, 14}
 	dupCount := fmt.Sprintf("%d", t.dup)
 	dupSize := humanSize(t.dupSize)
 	if t.dup > 0 {
@@ -639,14 +873,15 @@ func renderSection(cat category, stats map[string]*extStat, t totals) {
 		dupCount = bold(green(dupCount))
 		dupSize = green(dupSize)
 	}
-	line := strings.Repeat("─", inner)
-	fmt.Println("  ┌" + line + "┐")
-	fmt.Println(boxRow("All "+cat.key, bold(cyan(fmt.Sprintf("%d", t.count))), cyan(humanSize(t.size))))
-	fmt.Println(boxRow("Unique "+cat.key, bold(green(fmt.Sprintf("%d", t.uniq))), green(humanSize(t.uniqSize))))
-	fmt.Println(boxRow("Duplicates", dupCount, dupSize))
-	fmt.Println("  └" + line + "┘")
+	fmt.Println(tLine("╭", "┬", "╮", sw))
+	fmt.Println(tRow(sw, "lrr", dim("all "+cat.key),
+		bold(cyan(fmt.Sprintf("%d", t.count))), cyan(humanSize(t.size))))
+	fmt.Println(tRow(sw, "lrr", dim("unique"),
+		bold(green(fmt.Sprintf("%d", t.uniq))), green(humanSize(t.uniqSize))))
+	fmt.Println(tRow(sw, "lrr", dim("duplicates"), dupCount, dupSize))
+	fmt.Println(tLine("╰", "┴", "╯", sw))
 	if t.dup > 0 {
-		fmt.Printf("  %s\n", dim(fmt.Sprintf("%s reclaimable by removing duplicates", humanSize(t.dupSize))))
+		fmt.Println("  " + meter(t.dupSize, t.size))
 	}
 	fmt.Println()
 
@@ -661,12 +896,18 @@ func renderSection(cat category, stats map[string]*extStat, t totals) {
 		return sorted[i].ext < sorted[j].ext
 	})
 
-	fmt.Printf("  %s\n", bold("By extension"))
-	fmt.Printf("  %-7s %s %s %s  %-24s %s\n",
-		"", pad(dim("all"), 5), pad(dim("uniq"), 6), pad(dim("dup"), 5), "", pad(dim("size"), 9))
+	ew := []int{12, 7, 9, 12, 29, 12}
+	const eAligns = "lrrrlr"
+	fmt.Println(tLine("╭", "┬", "╮", ew))
+	fmt.Println(tRow(ew, eAligns,
+		dim("extension"), dim("all"), dim("unique"), dim("duplicates"), "", dim("size")))
+	fmt.Println(tLine("├", "┼", "┤", ew))
 	maxCount := sorted[0].count
-	const barWidth = 24
-	for _, s := range sorted {
+	const barWidth = 27
+	for i, s := range sorted {
+		if spacious && i > 0 {
+			fmt.Println(tSpace(ew))
+		}
 		barLen := s.count * barWidth / maxCount
 		if barLen < 1 {
 			barLen = 1
@@ -680,25 +921,44 @@ func renderSection(cat category, stats map[string]*extStat, t totals) {
 		}
 		bar := cyan(strings.Repeat("█", uniqLen)) +
 			yellow(strings.Repeat("█", barLen-uniqLen)) +
-			dim(strings.Repeat("·", barWidth-barLen))
+			dim(strings.Repeat("░", barWidth-barLen))
 		dupCell := dim("–")
 		if s.dup > 0 {
 			dupCell = yellow(fmt.Sprintf("%d", s.dup))
 		}
-		fmt.Printf("  %-7s %5d %6d %s  %s %9s\n",
-			s.ext, s.count, s.uniq, pad(dupCell, 5), bar, humanSize(s.size))
+		fmt.Println(tRow(ew, eAligns,
+			c256(cat.hue, s.ext),
+			fmt.Sprintf("%d", s.count), green(fmt.Sprintf("%d", s.uniq)), dupCell,
+			bar, humanSize(s.size)))
 	}
+	fmt.Println(tLine("╰", "┴", "╯", ew))
 	if t.dup > 0 {
-		fmt.Printf("  %s %s%s %s%s\n", dim("bar:"), cyan("█"), dim(" unique "), yellow("█"), dim(" duplicate"))
+		fmt.Printf("  %s%s %s%s\n", cyan("█"), dim(" unique "), yellow("█"), dim(" duplicate"))
 	}
 }
 
-func renderFooter(skipped int, elapsed time.Duration) {
+func renderFooter(skipped int, elapsed time.Duration, hs hashStats, verbose bool) {
+	// Unreadable entries are surfaced even without -verbose — that's a
+	// warning, not detail.
+	if !verbose && skipped > 0 {
+		fmt.Printf("\n  %s\n\n", dim(fmt.Sprintf("%d entries unreadable", skipped)))
+		return
+	}
+	if !verbose {
+		fmt.Println()
+		return
+	}
 	unit := time.Millisecond
 	if elapsed < time.Millisecond {
 		unit = time.Microsecond
 	}
 	note := fmt.Sprintf("scanned in %s", elapsed.Round(unit))
+	if hs.hashed > 0 || hs.cached > 0 {
+		note += fmt.Sprintf(" · %d hashed", hs.hashed)
+		if hs.cached > 0 {
+			note += fmt.Sprintf(", %d from cache", hs.cached)
+		}
+	}
 	if skipped > 0 {
 		note += fmt.Sprintf(" · %d entries unreadable", skipped)
 	}
@@ -707,20 +967,28 @@ func renderFooter(skipped int, elapsed time.Duration) {
 
 // renderGroups prints each duplicate group with its file paths.
 func renderGroups(root string, cat category, groups [][]*fileEntry) {
-	fmt.Printf("  %s\n", bold(fmt.Sprintf("Duplicate %s groups (%d)", cat.singular, len(groups))))
+	fmt.Printf("  %s %s\n", c256(cat.hue, "●"),
+		bold(fmt.Sprintf("Duplicate %s groups (%d)", cat.singular, len(groups))))
 	if len(groups) == 0 {
 		fmt.Printf("  %s\n\n", dim("no duplicate "+cat.key+" found"))
 		return
 	}
 	for i, group := range groups {
-		fmt.Printf("\n  %s %s\n", yellow(fmt.Sprintf("● group %d", i+1)),
+		fmt.Printf("\n  %s %s\n", bold(fmt.Sprintf("group %d", i+1)),
 			dim(fmt.Sprintf("· %d files · %s each", len(group), humanSize(group[0].size))))
 		for j, e := range group {
-			marker, note := yellow("✗"), ""
-			if j == 0 {
-				marker, note = green("✓"), dim("  (original)")
+			conn := dim("├")
+			if j == len(group)-1 {
+				conn = dim("╰")
 			}
-			fmt.Printf("    %s %s%s\n", marker, relPath(root, e.path), note)
+			if j == 0 {
+				conn = dim("┌")
+			}
+			marker, note := yellow("✗ "+relPath(root, e.path)), ""
+			if j == 0 {
+				marker, note = green("✓ "+relPath(root, e.path)), " "+dim(ital("original"))
+			}
+			fmt.Printf("  %s %s%s\n", conn, marker, note)
 		}
 	}
 	fmt.Println()
@@ -807,6 +1075,13 @@ func printCommandBlock(c cmdHelp) {
 	h("               (files/cache) skips that path relative to the current")
 	h("               directory; repeat or comma-separate for multiple")
 	h("  " + cyan("-hidden") + "      include hidden directories (.foo/) in the scan")
+	h("  " + cyan("-no-cache") + "    disable the hash cache for this run")
+	h("  " + cyan("-verify") + "      re-hash all duplicate candidates, ignoring cached")
+	h("               hashes (the cache is still updated)")
+	h("  " + cyan("-spacious") + "    add vertical space between table rows for easier")
+	h("               reading (default is compact)")
+	h("  " + cyan("-verbose") + "     show scan details: timing, hash-cache stats, and")
+	h("               hints (shorthand: " + cyan("-vv") + ")")
 	h("  " + cyan("-version") + "     print version and exit")
 	h("  " + cyan("-help") + "        show help for this command")
 }
@@ -833,7 +1108,7 @@ func printHelp() {
 	fmt.Println()
 	h(bold(magenta("◆ quickap "+version)) + dim(" · file indexer with duplicate detection"))
 	fmt.Println()
-	h(bold("USAGE"))
+	h(bold(magenta("USAGE")))
 	h("  quickap [command] [flags]")
 	fmt.Println()
 	h("  Indexes image, document, music, video, archive, and application")
@@ -841,7 +1116,7 @@ func printHelp() {
 	h("  prints a compact overview of every category; a category command")
 	h("  prints detailed per-extension stats and enables -move/-delete.")
 	fmt.Println()
-	h(bold("COMMANDS"))
+	h(bold(magenta("COMMANDS")))
 	h("  " + cyan("(none)") + "       index all categories, compact overview")
 	h("  " + cyan("images") + "       index images only")
 	h("  " + cyan("docs") + "         index documents only (alias: documents)")
@@ -852,11 +1127,36 @@ func printHelp() {
 	h("  " + cyan("help [cmd]") + "   show this help, or help for one command")
 	h("  " + cyan("version") + "      print version")
 	fmt.Println()
-	for _, name := range []string{"", "images", "docs", "music", "videos", "archives", "apps"} {
-		printCommandBlock(cmdHelps[name])
-		fmt.Println()
-	}
-	h(bold("NOTES"))
+	h(bold(magenta("FLAGS")))
+	h("  Every command accepts these:")
+	fmt.Println()
+	h("  " + cyan("-list") + "        list duplicate groups with file paths")
+	h("  " + cyan("-ignore DIR") + "  skip a directory while scanning; a bare name")
+	h("               (node_modules) skips every dir with that name, a path")
+	h("               (files/cache) skips that path relative to the current")
+	h("               directory; repeat or comma-separate for multiple")
+	h("  " + cyan("-hidden") + "      include hidden directories (.foo/) in the scan")
+	h("  " + cyan("-no-cache") + "    disable the hash cache for this run")
+	h("  " + cyan("-verify") + "      re-hash all duplicate candidates, ignoring cached")
+	h("               hashes (the cache is still updated)")
+	h("  " + cyan("-spacious") + "    add vertical space between table rows for easier")
+	h("               reading (default is compact)")
+	h("  " + cyan("-verbose") + "     show scan details: timing, hash-cache stats, and")
+	h("               hints (shorthand: " + cyan("-vv") + ")")
+	h("  " + cyan("-version") + "     print version and exit")
+	h("  " + cyan("-help") + "        show help for the current command")
+	fmt.Println()
+	h("  The cleanup flags work on one category at a time, so they need a")
+	h("  category command — e.g. " + cyan("quickap images -delete") + ":")
+	fmt.Println()
+	h("  " + cyan("-move DIR") + "    move each duplicate group (original + copies) into")
+	h("               DIR/<category>/group-NNN/ for manual sorting; DIR is")
+	h("               created if needed, resolved relative to the current")
+	h("               directory")
+	h("  " + cyan("-delete") + "      " + red("permanently delete") + " duplicate files, keeping each")
+	h("               group's original; excludes -move")
+	fmt.Println()
+	h(bold(magenta("NOTES")))
 	h("  · duplicates are byte-identical files (SHA-256), regardless of name")
 	h("    or extension; the lexically first path counts as the original")
 	for _, cat := range categories {
@@ -865,6 +1165,9 @@ func printHelp() {
 	h("  · -move and -delete act on one category at a time, so they require")
 	h("    a category command: quickap images -delete, quickap docs -move DIR")
 	h("  · hidden directories (.git, ...) are skipped unless -hidden is set")
+	h("  · computed hashes are cached (per scan directory, keyed by file size")
+	h("    and mtime) so unchanged files are never re-read; repeat runs only")
+	h("    hash new or modified files — use -verify to force a full re-hash")
 	h("  · " + yellow("-delete is permanent") + " — there is no undo; run -list first to")
 	h("    review, or use -move to sort manually instead")
 	h("  · -move modifies your files — the summary report always shows the")
