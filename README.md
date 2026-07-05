@@ -14,8 +14,8 @@ what's in it twice.**
 [![Release](https://img.shields.io/github/v/release/jordancannon88/quickap)](https://github.com/jordancannon88/quickap/releases/latest)
 
 quickap indexes **images · documents · music · videos · archives ·
-applications** under the current directory and reports totals,
-per-extension stats, and duplicates — in a clean, colorful terminal UI.
+applications** under any directory and reports totals, per-extension
+stats, and duplicates — in a clean, colorful terminal UI.
 
 - 🔍 **Index** six file categories in one recursive scan
 - 👯 **Find duplicates** by content (SHA-256), whatever the file is named
@@ -51,8 +51,9 @@ with two-tone bars (cyan unique, yellow duplicate):
 - Hash cache: repeat scans only read new or modified files
 - Clean up duplicates your way: `-list` to review, `-move` into per-group
   folders for manual sorting, or `-delete` keeping each original
-- Scoped scans: `-ignore` directories by name or path, opt into hidden
-  directories with `-hidden`
+- Scoped scans: point it at any directory (`quickap images ~/Pictures`),
+  `-ignore` directories by name or path, opt into hidden directories
+  with `-hidden`
 - Single static binary for Linux, macOS, and Windows — no runtime, no
   config, no dependencies
 - Signed releases: SHA-256 checksums with keyless cosign signatures
@@ -145,10 +146,12 @@ SHA-256 sums.
 ## Usage
 
 ```sh
-quickap [command] [flags]
+quickap [command] [flags] [directory]
 
-quickap                   # overview of all categories
+quickap                   # overview of all categories, current directory
+quickap ~/Pictures        # ... of another directory
 quickap images            # detailed image report
+quickap images ~/Pictures # ... for another directory
 quickap docs -list        # document report + duplicate groups
 quickap music -move DIR   # move music duplicate groups into DIR for sorting
 quickap videos -delete    # delete video duplicates, keeping originals
@@ -158,6 +161,10 @@ quickap help              # full help, including per-command flags
 quickap help docs         # help for one command (also: quickap docs -help)
 quickap version           # print version (also: -version)
 ```
+
+The directory to scan defaults to the current one; pass a different one as
+the **last** argument (after any flags). Relative `-move` and `-ignore`
+paths resolve against the scanned directory.
 
 ### Commands
 
@@ -183,9 +190,9 @@ command**; the bare `quickap` command indexes and reports only.
 | Flag        | Commands       | Description                                                                                                                 |
 | ----------- | -------------- | --------------------------------------------------------------------------------------------------------------------------|
 | `-list`     | all            | List each duplicate group with file paths. The kept original is marked `✓`, duplicates `✗`.                                 |
-| `-move DIR` | category cmds  | Move each duplicate group — **original and copies** — into `DIR/<category>/group-NNN/` for manual side-by-side sorting. `DIR` is created if needed and resolved relative to the current directory. |
+| `-move DIR` | category cmds  | Move each duplicate group — **original and copies** — into `DIR/<category>/group-NNN/` for manual side-by-side sorting. `DIR` is created if needed and resolved relative to the scanned directory. |
 | `-delete`   | category cmds  | **Permanently delete** duplicate files, keeping each group's original. No undo. Cannot be combined with `-move`.            |
-| `-ignore DIR` | all          | Skip a directory while scanning. A bare name (`node_modules`) skips every directory with that name; a path (`files/cache`) skips that path relative to the current directory. Repeat the flag or comma-separate for multiple: `-ignore tunes,media -ignore dist`. |
+| `-ignore DIR` | all          | Skip a directory while scanning. A bare name (`node_modules`) skips every directory with that name; a path (`files/cache`) skips that path relative to the scanned directory. Repeat the flag or comma-separate for multiple: `-ignore tunes,media -ignore dist`. |
 | `-hidden`   | all            | Include hidden directories (`.foo/`) in the scan. Skipped by default.                                                       |
 | `-no-cache` | all            | Disable the hash cache for this run (no reads from or writes to it).                                                        |
 | `-verify`   | all            | Re-hash every duplicate candidate, ignoring cached hashes (the cache is still updated with the fresh results).              |
@@ -200,10 +207,9 @@ command**; the bare `quickap` command indexes and reports only.
 that looks bloated:
 
 ```sh
-cd ~/Pictures
-quickap                      # all categories, compact table
-quickap images               # per-extension detail for images
-quickap images -verbose      # ... plus scan timing and cache stats
+quickap ~/Pictures                    # all categories, compact table
+quickap images ~/Pictures             # per-extension detail for images
+quickap images -verbose ~/Pictures    # ... plus scan timing and cache stats
 ```
 
 **Clean up a photo library, carefully.** Review what would be touched
@@ -291,14 +297,17 @@ Cached results are stored in your platform's user cache directory, under a
 | macOS    | `~/Library/Caches/quickap/`                          |
 | Windows  | `%LocalAppData%\quickap\`                            |
 
-Each scanned directory gets its own file, named after a hash of the
-directory's absolute path (e.g. `3c8b9a9aba9307ba.json`), containing a JSON
-map of `path → {size, mtime, sha256}` for every file that has been
-content-hashed. Nothing is ever written into the scanned directories
-themselves.
+All scans share a single `hashes.json`, a JSON map of `path → {size,
+mtime, sha256}` keyed by absolute file path for every file that has been
+content-hashed. Because entries are path-keyed rather than
+per-scan-directory, hashes carry across scan roots — scan a parent
+directory once and later scans of any subdirectory reuse its hashes
+instead of re-reading the files. Nothing is ever written into the scanned
+directories themselves.
 
-Cache housekeeping is automatic: entries for deleted files are pruned on
-each run, and a missing or corrupt cache file just means the next run
+Cache housekeeping is automatic: entries for files deleted under the
+scanned directory are pruned on each run (entries from other trees are
+left alone), and a missing or corrupt cache file just means the next run
 re-hashes everything. It's always safe to delete the cache directory —
 that's equivalent to a one-time `-no-cache` run. Use `-verify` to force a
 full re-hash if you suspect a file changed without its size or mtime
@@ -319,7 +328,8 @@ Extensions are matched case-insensitively.
 
 ## Notes
 
-- The scan is recursive from the current working directory.
+- The scan is recursive from the scanned directory (current directory by
+  default, or the one passed as the last argument).
 - The summary report always reflects the state **before** `-move`/`-delete`.
 - `-move` keeps original filenames, suffixing collisions within a group
   (`a.jpg`, `a-2.jpg`), and falls back to copy+delete across filesystems.

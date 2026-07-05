@@ -232,6 +232,7 @@ func main() {
 	}
 
 	var active []category
+	var rootArg string
 	switch sub {
 	case "":
 		active = categories
@@ -247,12 +248,20 @@ func main() {
 		return
 	default:
 		cat := categoryBySub(sub)
-		if cat == nil {
-			fmt.Fprintf(os.Stderr, "quickap: unknown command %q (expected %s, \"help\", or \"version\")\nrun \"quickap help\" for usage\n", sub, commandList())
-			os.Exit(1)
+		if cat != nil {
+			sub = cat.cmd
+			active = []category{*cat}
+			break
 		}
-		sub = cat.cmd
-		active = []category{*cat}
+		// Not a command — a directory to scan? (quickap ~/Pictures)
+		if info, err := os.Stat(sub); err == nil && info.IsDir() {
+			rootArg = sub
+			sub = ""
+			active = categories
+			break
+		}
+		fmt.Fprintf(os.Stderr, "quickap: unknown command %q (expected %s, \"help\", \"version\", or a directory)\nrun \"quickap help\" for usage\n", sub, commandList())
+		os.Exit(1)
 	}
 
 	fs := flag.NewFlagSet("quickap "+sub, flag.ExitOnError)
@@ -290,7 +299,30 @@ func main() {
 		os.Exit(1)
 	}
 
-	root, err := os.Getwd()
+	// A trailing positional argument is the directory to scan.
+	switch rest := fs.Args(); {
+	case len(rest) > 1, len(rest) == 1 && rootArg != "":
+		fmt.Fprintln(os.Stderr, "quickap: expected at most one directory (note: flags must come before the directory)")
+		os.Exit(1)
+	case len(rest) == 1:
+		rootArg = rest[0]
+	}
+
+	var root string
+	var err error
+	if rootArg == "" {
+		root, err = os.Getwd()
+	} else {
+		root, err = filepath.Abs(rootArg)
+		if err == nil {
+			info, statErr := os.Stat(root)
+			if statErr != nil {
+				err = statErr
+			} else if !info.IsDir() {
+				err = fmt.Errorf("%s is not a directory", rootArg)
+			}
+		}
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "quickap:", err)
 		os.Exit(1)
@@ -537,13 +569,16 @@ func hashFile(path string) (string, error) {
 }
 
 // hashCache persists computed SHA-256 hashes between runs so unchanged
-// files (same size and mtime) are never re-read. One cache file per scan
-// root, under the user cache dir. A nil *hashCache is a valid no-op cache.
-// get/put are safe for concurrent use (lookups on the scan goroutine race
-// with puts from hash workers).
+// files (same size and mtime) are never re-read. One cache file shared by
+// all scans, keyed by absolute file path — so hashing a parent directory
+// also warms the cache for later runs against its subdirectories. A nil
+// *hashCache is a valid no-op cache. get/put are safe for concurrent use
+// (lookups on the scan goroutine race with puts from hash workers).
 type hashCache struct {
 	mu      sync.Mutex
 	file    string
+	root    string // scan root; pruning is scoped to entries under it
+	legacy  string // pre-shared-layout per-root cache, merged then removed
 	dirty   bool
 	touched map[string]bool
 	Entries map[string]cacheEntry `json:"entries"`
@@ -555,27 +590,37 @@ type cacheEntry struct {
 	Hash  string `json:"sha256"`
 }
 
-func cacheFileFor(root string) (string, error) {
-	dir, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256([]byte(root))
-	return filepath.Join(dir, "quickap", hex.EncodeToString(sum[:8])+".json"), nil
-}
-
-// loadCache reads the cache for root, returning an empty cache on any
-// error (missing file, corrupt JSON) — the cache is an optimization only.
+// loadCache reads the shared cache, returning an empty cache on any error
+// (missing file, corrupt JSON) — the cache is an optimization only. A
+// legacy per-root cache file (older layout) is merged in and cleaned up
+// on save.
 func loadCache(root string) *hashCache {
-	file, err := cacheFileFor(root)
+	dir, err := os.UserCacheDir()
 	if err != nil {
 		return nil
 	}
-	c := &hashCache{file: file, touched: map[string]bool{}, Entries: map[string]cacheEntry{}}
-	data, err := os.ReadFile(file)
-	if err == nil {
+	c := &hashCache{
+		file:    filepath.Join(dir, "quickap", "hashes.json"),
+		root:    root,
+		touched: map[string]bool{},
+		Entries: map[string]cacheEntry{},
+	}
+	if data, err := os.ReadFile(c.file); err == nil {
 		if json.Unmarshal(data, c) != nil || c.Entries == nil {
 			c.Entries = map[string]cacheEntry{}
+		}
+	}
+	sum := sha256.Sum256([]byte(root))
+	c.legacy = filepath.Join(dir, "quickap", hex.EncodeToString(sum[:8])+".json")
+	if data, err := os.ReadFile(c.legacy); err == nil {
+		var old hashCache
+		if json.Unmarshal(data, &old) == nil {
+			for path, e := range old.Entries {
+				if _, ok := c.Entries[path]; !ok {
+					c.Entries[path] = e
+					c.dirty = true
+				}
+			}
 		}
 	}
 	return c
@@ -607,8 +652,9 @@ func (c *hashCache) put(path string, size, mtime int64, hash string) {
 	c.dirty = true
 }
 
-// save prunes entries whose files no longer exist and writes the cache
-// back if anything changed. Errors are ignored — worst case the next run
+// save prunes entries under the scan root whose files no longer exist
+// (entries from other trees are left alone) and writes the cache back if
+// anything changed. Errors are ignored — worst case the next run
 // re-hashes.
 func (c *hashCache) save() {
 	if c == nil {
@@ -616,8 +662,9 @@ func (c *hashCache) save() {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	prefix := c.root + string(filepath.Separator)
 	for path := range c.Entries {
-		if c.touched[path] {
+		if c.touched[path] || !strings.HasPrefix(path, prefix) {
 			continue
 		}
 		if _, err := os.Lstat(path); os.IsNotExist(err) {
@@ -635,7 +682,9 @@ func (c *hashCache) save() {
 	if os.MkdirAll(filepath.Dir(c.file), 0o755) != nil {
 		return
 	}
-	os.WriteFile(c.file, data, 0o644)
+	if os.WriteFile(c.file, data, 0o644) == nil && c.legacy != "" {
+		os.Remove(c.legacy)
+	}
 }
 
 // hashStats counts how duplicate-candidate hashes were obtained.
@@ -1109,10 +1158,11 @@ func printHelp() {
 	h(bold(magenta("◆ quickap "+version)) + dim(" · file indexer with duplicate detection"))
 	fmt.Println()
 	h(bold(magenta("USAGE")))
-	h("  quickap [command] [flags]")
+	h("  quickap [command] [flags] [directory]")
 	fmt.Println()
 	h("  Indexes image, document, music, video, archive, and application")
-	h("  files under the current directory (recursive). The bare command")
+	h("  files under a directory (recursive) — the current one by default,")
+	h("  or the directory given as the last argument. The bare command")
 	h("  prints a compact overview of every category; a category command")
 	h("  prints detailed per-extension stats and enables -move/-delete.")
 	fmt.Println()
@@ -1151,7 +1201,7 @@ func printHelp() {
 	fmt.Println()
 	h("  " + cyan("-move DIR") + "    move each duplicate group (original + copies) into")
 	h("               DIR/<category>/group-NNN/ for manual sorting; DIR is")
-	h("               created if needed, resolved relative to the current")
+	h("               created if needed, resolved relative to the scanned")
 	h("               directory")
 	h("  " + cyan("-delete") + "      " + red("permanently delete") + " duplicate files, keeping each")
 	h("               group's original; excludes -move")
