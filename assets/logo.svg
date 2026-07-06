@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="260" viewBox="0 0 760 260" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" role="img" aria-labelledby="logo-title">
+<title id="logo-title">quickap — one quick capture of everything in a directory</title>
+<rect x="1" y="1" width="758" height="258" rx="16" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+<path d="M2 56V17A15 15 0 0 1 17 2h726a15 15 0 0 1 15 15v39Z" fill="#21262d"/>
+<path d="M2 57h756" stroke="#30363d" stroke-width="2"/>
+<circle cx="38" cy="29" r="9" fill="#f47067"/>
+<circle cx="70" cy="29" r="9" fill="#e0b959"/>
+<circle cx="102" cy="29" r="9" fill="#8ddb8c"/>
+<text x="380" y="150" text-anchor="middle" font-size="64" font-weight="bold" xml:space="preserve"><tspan fill="#d787d7">◆ </tspan><tspan fill="#e6edf3">quickap</tspan><tspan fill="#5fd7d7" opacity="0.85">█</tspan></text>
+<circle cx="278" cy="205" r="10" fill="#5fd7d7"/>
+<circle cx="312" cy="205" r="10" fill="#5fafff"/>
+<circle cx="346" cy="205" r="10" fill="#d787d7"/>
+<circle cx="380" cy="205" r="10" fill="#ffaf5f"/>
+<circle cx="414" cy="205" r="10" fill="#d7af5f"/>
+<circle cx="448" cy="205" r="10" fill="#87d787"/>
+<circle cx="482" cy="205" r="10" fill="#bcbcbc"/>
+</svg>

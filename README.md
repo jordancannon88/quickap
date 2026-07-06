@@ -1,38 +1,39 @@
-# quickap
+<div align="right">
 
 [![CI](https://github.com/jordancannon88/quickap/actions/workflows/ci.yml/badge.svg)](https://github.com/jordancannon88/quickap/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/jordancannon88/quickap)](https://github.com/jordancannon88/quickap/releases/latest)
 
+</div>
+
 <div align="center">
 
-### ⚡ **quick**ap = **quick cap**ture ⚡
+<img src="assets/logo.svg" alt="quickap logo: a miniature terminal window showing ◆ quickap with a block cursor, above a row of seven colored dots, one for each file category" width="380">
 
-*Say it "quick cap."*
-<br>
-One quick capture of everything in a directory.
+**A fast, zero-dependency CLI for finding out what's in a directory —
+and what's in it twice.**
+
+*⚡ **quick**ap = **quick cap**ture — say it "quick cap": one quick
+capture of everything in a directory.*
+
+<sub>images · documents · music · videos · archives · applications ·
+everything else</sub>
+
+**[Install](#install)** · **[Usage](#usage)** ·
+**[Commands](#commands)** ·
+**[How it works](#how-duplicate-detection-works)** ·
+**[Project wiki](https://github.com/jordancannon88/quickap/wiki)**
 
 </div>
 
-**A fast, zero-dependency CLI for finding out what's in a directory — and
-what's in it twice.**
-
-> [!NOTE]
-> AI was used to help write the code in this project.
-
-quickap indexes **images · documents · music · videos · archives ·
-applications · everything else** under any directory and reports totals,
-per-extension stats, and duplicates — in a clean, colorful terminal UI.
-
-- 🔍 **Index** seven file categories in one recursive scan
+- 🔍 **Index** seven file categories in one recursive scan — totals and
+  per-extension stats in a clean, colorful terminal UI
 - 👯 **Find duplicates** by content (SHA-256), whatever the file is named
 - 🧹 **Clean up** — list, move for manual sorting, or delete duplicates
 - 📦 **Single binary** — no runtime, no config, Linux/BSD/macOS/Windows
 
-> [!TIP]
-> Beyond this README, the [project wiki](https://github.com/jordancannon88/quickap/wiki)
-> covers the release process, verifying downloads, and the development
-> workflow.
+> [!NOTE]
+> AI was used to help write the code in this project.
 
 ## At a glance
 
