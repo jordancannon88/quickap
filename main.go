@@ -88,7 +88,7 @@ var categories = []category{
 	},
 	{
 		// exts nil: matches every extension no category above claims.
-		cmd: "other", key: "other files", label: "Other files", singular: "other", hue: 250,
+		cmd: "other", key: "other files", label: "Other", singular: "other", hue: 250,
 	},
 }
 

@@ -40,7 +40,7 @@ everything else</sub>
 Running `quickap` with no arguments gives a compact overview of every
 category:
 
-<img src="assets/screenshot.svg" alt="quickap overview output: a table of Images, Documents, Music, Videos, Archives, Applications, and Other files with file counts, sizes, unique/duplicate counts, and reclaimable space, plus a reclaimable-space meter" width="760">
+<img src="assets/screenshot.svg" alt="quickap overview output: a table of Images, Documents, Music, Videos, Archives, Applications, and Other with file counts, sizes, unique/duplicate counts, and reclaimable space, plus a reclaimable-space meter" width="760">
 
 A category command — here `quickap videos` — gives the detailed view:
 a summary table, a reclaimable-space meter, and a per-extension breakdown
