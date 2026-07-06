@@ -352,6 +352,10 @@ func main() {
 				err = statErr
 			} else if !info.IsDir() {
 				err = fmt.Errorf("%s is not a directory", rootArg)
+			} else {
+				// WalkDir does not follow symlinks, so a symlinked
+				// root would scan nothing; walk its target instead.
+				root, err = filepath.EvalSymlinks(root)
 			}
 		}
 	}
@@ -473,6 +477,8 @@ func ignoredDir(root, path string, patterns []string) bool {
 // scan walks root once and collects every file matching an active category.
 // Hidden directories are skipped unless includeHidden is set, ignored
 // directories always; unreadable entries are counted, not fatal.
+// Non-regular files (symlinks, sockets, FIFOs, devices) are ignored:
+// never followed, indexed, or hashed.
 func scan(root string, active []category, includeHidden bool, ignores []string) (map[string][]*fileEntry, int) {
 	byCategory := map[string][]*fileEntry{}
 	var skipped int
@@ -491,6 +497,12 @@ func scan(root string, active []category, includeHidden bool, ignores []string) 
 			if ignoredDir(root, path, ignores) {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		if d.Type()&fs.ModeType != 0 {
+			// Symlinks would otherwise be indexed with the link's own
+			// lstat size while hashing follows to the target; skip all
+			// non-regular files instead.
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(d.Name()))
@@ -1309,6 +1321,8 @@ func printHelp() {
 	h("  · -move and -delete act on one category at a time, so they require")
 	h("    a category command: quickap images -delete, quickap docs -move DIR")
 	h("  · hidden directories (.git, ...) are skipped unless -hidden is set")
+	h("  · symbolic links are ignored (never followed, indexed, or hashed);")
+	h("    a symlinked scan directory is resolved to its target first")
 	h("  · computed hashes are cached (per scan directory, keyed by file size")
 	h("    and mtime) so unchanged files are never re-read; repeat runs only")
 	h("    hash new or modified files — use -verify to force a full re-hash")

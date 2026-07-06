@@ -368,6 +368,10 @@ extensionless files show as `(none)`.
   Windows).
 - A `-move` target inside the current directory will be re-indexed on the
   next run; use a target outside it (e.g. `../dupes`) to avoid that.
+- Symbolic links (and other non-regular files: sockets, FIFOs, devices)
+  are ignored — never followed, indexed, or hashed — so a link and its
+  target are never flagged as duplicates of each other. A symlinked scan
+  directory itself is resolved to its target before scanning.
 - Unreadable files or directories are skipped and counted in the footer,
   never fatal.
 - Colors turn off automatically when output is piped, or set `NO_COLOR=1`.

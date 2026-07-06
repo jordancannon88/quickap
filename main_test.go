@@ -129,6 +129,47 @@ func TestScanRoutesToOther(t *testing.T) {
 	}
 }
 
+func TestScanIgnoresSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "real.jpg"), []byte("jpegdata"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "notes.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real.jpg", filepath.Join(dir, "link.jpg")); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+	if err := os.Symlink("sub", filepath.Join(dir, "dirlink")); err != nil {
+		t.Fatal(err)
+	}
+
+	byCategory, skipped := scan(dir, categories, false, nil)
+	if skipped != 0 {
+		t.Errorf("skipped = %d, want 0 (symlinks should be ignored, not counted)", skipped)
+	}
+	var total int
+	for key, entries := range byCategory {
+		total += len(entries)
+		for _, e := range entries {
+			switch filepath.Base(e.path) {
+			case "link.jpg", "dirlink":
+				t.Errorf("%s: symlink %s was indexed", key, e.path)
+			}
+		}
+	}
+	// Exactly the two regular files: real.jpg and sub/notes.txt.
+	if total != 2 {
+		t.Errorf("indexed %d files, want 2", total)
+	}
+	if n := len(byCategory["images"]); n != 1 {
+		t.Errorf("images = %d files, want 1", n)
+	}
+}
+
 func TestMultiFlag(t *testing.T) {
 	var m multiFlag
 	m.Set("a,b")
