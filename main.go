@@ -299,6 +299,9 @@ func main() {
 	var listUnique bool
 	fs.BoolVar(&listUnique, "list-unique", false, "list unique files (every file that is not a duplicate copy) with paths")
 	fs.BoolVar(&listUnique, "lu", false, "shorthand for -list-unique")
+	var listLarge bool
+	fs.BoolVar(&listLarge, "list-large", false, "list the 50 largest files, largest first")
+	fs.BoolVar(&listLarge, "ll", false, "shorthand for -list-large")
 	hidden := fs.Bool("hidden", false, "include hidden directories in the scan")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	var ignores multiFlag
@@ -428,6 +431,11 @@ func main() {
 	if listUnique {
 		for _, r := range results {
 			renderUnique(root, r.cat, r.entries)
+		}
+	}
+	if listLarge {
+		for _, r := range results {
+			renderLarge(root, r.cat, r.entries)
 		}
 	}
 	if listDups {
@@ -1132,14 +1140,24 @@ func renderGroups(root string, cat category, groups [][]*fileEntry) {
 			if j == 0 {
 				conn = dim("┌")
 			}
-			marker, note := yellow("✗ "+relPath(root, e.path)), ""
+			marker, note := yellow("✗ ")+stylePath(relPath(root, e.path), yellow), ""
 			if j == 0 {
-				marker, note = green("✓ "+relPath(root, e.path)), " "+dim(ital("original"))
+				marker, note = green("✓ ")+stylePath(relPath(root, e.path), green), " "+dim(ital("original"))
 			}
 			fmt.Printf("  %s %s%s\n", conn, marker, note)
 		}
 	}
 	fmt.Println()
+}
+
+// stylePath renders a relative path with its directory part dimmed and
+// the file name run through color, so names pop in long listings.
+func stylePath(rel string, color func(string) string) string {
+	dir, name := filepath.Split(rel)
+	if dir == "" {
+		return color(name)
+	}
+	return dim(dir) + color(name)
 }
 
 // renderUnique prints every unique file with its path and size. Unique
@@ -1159,6 +1177,7 @@ func renderUnique(root string, cat category, entries []*fileEntry) {
 		fmt.Printf("  %s\n\n", dim("no unique "+cat.key+" found"))
 		return
 	}
+	hue := func(s string) string { return c256(cat.hue, s) }
 	for i, e := range uniq {
 		conn := dim("├")
 		switch {
@@ -1169,7 +1188,48 @@ func renderUnique(root string, cat category, entries []*fileEntry) {
 		case i == len(uniq)-1:
 			conn = dim("╰")
 		}
-		fmt.Printf("  %s %s %s\n", conn, relPath(root, e.path), dim("· "+humanSize(e.size)))
+		fmt.Printf("  %s %s %s\n", conn, stylePath(relPath(root, e.path), hue), dim("· "+humanSize(e.size)))
+	}
+	fmt.Println()
+}
+
+// renderLarge prints the largest files, largest first, capped at 50.
+func renderLarge(root string, cat category, entries []*fileEntry) {
+	const limit = 50
+	sorted := make([]*fileEntry, len(entries))
+	copy(sorted, entries)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].size != sorted[j].size {
+			return sorted[i].size > sorted[j].size
+		}
+		return sorted[i].path < sorted[j].path
+	})
+	shown := sorted
+	if len(shown) > limit {
+		shown = shown[:limit]
+	}
+	head := fmt.Sprintf("Largest %s files (%d)", cat.singular, len(shown))
+	if len(sorted) > limit {
+		head = fmt.Sprintf("Largest %s files (top %d of %d)", cat.singular, limit, len(sorted))
+	}
+	fmt.Printf("  %s %s\n", c256(cat.hue, "●"), bold(head))
+	if len(shown) == 0 {
+		fmt.Printf("  %s\n\n", dim("no "+cat.key+" found"))
+		return
+	}
+	hue := func(s string) string { return c256(cat.hue, s) }
+	for i, e := range shown {
+		conn := dim("├")
+		switch {
+		case len(shown) == 1:
+			conn = dim("─")
+		case i == 0:
+			conn = dim("┌")
+		case i == len(shown)-1:
+			conn = dim("╰")
+		}
+		// Size leads the color here — it is what -list-large is about.
+		fmt.Printf("  %s %s %s %s\n", conn, stylePath(relPath(root, e.path), hue), dim("·"), yellow(humanSize(e.size)))
 	}
 	fmt.Println()
 }
@@ -1253,6 +1313,8 @@ func printCommandBlock(c cmdHelp) {
 	h("  " + cyan("-list-unique") + "     list unique " + scope + "files — every file that is not a")
 	h("                   duplicate copy, as counted by the unique column")
 	h("                   (shorthand: " + cyan("-lu") + ")")
+	h("  " + cyan("-list-large") + "      list the 50 largest " + scope + "files, largest first")
+	h("                   (shorthand: " + cyan("-ll") + ")")
 	if c.actions {
 		h("  " + cyan("-move DIR") + "        move each duplicate " + c.scope + " group (original +")
 		h("                   copies) into " + c.moveDest + "group-NNN/ for manual")
@@ -1330,6 +1392,8 @@ func printHelp() {
 	h("                   (shorthand: " + cyan("-ld") + ")")
 	h("  " + cyan("-list-unique") + "     list unique files — every file that is not a duplicate")
 	h("                   copy, as counted by the unique column (shorthand: " + cyan("-lu") + ")")
+	h("  " + cyan("-list-large") + "      list the 50 largest files, largest first")
+	h("                   (shorthand: " + cyan("-ll") + ")")
 	h("  " + cyan("-ignore DIR") + "      skip a directory while scanning; a bare name")
 	h("                   (node_modules) skips every dir with that name, a path")
 	h("                   (files/cache) skips that path relative to the current")

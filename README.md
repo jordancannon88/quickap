@@ -173,6 +173,7 @@ quickap images                # detailed image report
 quickap images ~/Pictures     # ... for another directory
 quickap docs -list-duplicates # document report + duplicate groups (-ld)
 quickap docs -list-unique     # ... + unique files, i.e. all but dup copies (-lu)
+quickap docs -list-large      # ... + the 50 largest documents (-ll)
 quickap music -move DIR       # move music duplicate groups into DIR for sorting
 quickap videos -delete        # delete video duplicates, keeping originals
 quickap other                 # detailed report of uncategorized files
@@ -213,6 +214,7 @@ command**; the bare `quickap` command indexes and reports only.
 | ----------- | -------------- | --------------------------------------------------------------------------------------------------------------------------|
 | `-list-duplicates` / `-ld` | all | List each duplicate group with file paths. The kept original is marked `✓`, duplicates `✗`.                            |
 | `-list-unique` / `-lu` | all | List every unique file with its size — exactly what the `unique` column counts: every file that is not a duplicate copy, so a group's kept original is included. |
+| `-list-large` / `-ll` | all | List the 50 largest files with their sizes, largest to smallest.                                                             |
 | `-move DIR` | category cmds  | Move each duplicate group — **original and copies** — into `DIR/<category>/group-NNN/` for manual side-by-side sorting. `DIR` is created if needed and resolved relative to the scanned directory. |
 | `-delete`   | category cmds  | **Permanently delete** duplicate files, keeping each group's original. No undo. Cannot be combined with `-move`.            |
 | `-ignore DIR` | all          | Skip a directory while scanning. A bare name (`node_modules`) skips every directory with that name; a path (`files/cache`) skips that path relative to the scanned directory. Repeat the flag or comma-separate for multiple: `-ignore tunes,media -ignore dist`. |
