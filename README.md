@@ -63,7 +63,7 @@ so what you see is exactly what the tool prints.*
 - Duplicate detection by content (SHA-256) — catches renamed and
   re-extensioned copies, never false-flags same-size files
 - Hash cache: repeat scans only read new or modified files
-- Clean up duplicates your way: `-list` to review, `-move` into per-group
+- Clean up duplicates your way: `-list-duplicates` to review, `-move` into per-group
   folders for manual sorting, or `-delete` keeping each original
 - Scoped scans: point it at any directory (`quickap images ~/Pictures`),
   `-ignore` directories by name or path, opt into hidden directories
@@ -167,20 +167,20 @@ SHA-256 sums.
 ```sh
 quickap [command] [flags] [directory]
 
-quickap                   # overview of all categories, current directory
-quickap ~/Pictures        # ... of another directory
-quickap images            # detailed image report
-quickap images ~/Pictures # ... for another directory
-quickap docs -list        # document report + duplicate groups
-quickap docs -list-unique # ... + unique files, i.e. all but dup copies (-lu)
-quickap music -move DIR   # move music duplicate groups into DIR for sorting
-quickap videos -delete    # delete video duplicates, keeping originals
-quickap other             # detailed report of uncategorized files
-quickap -ignore dist      # skip every dir named "dist" (repeatable, or a,b,c)
-quickap -hidden           # include hidden directories in the scan
-quickap help              # full help, including per-command flags
-quickap help docs         # help for one command (also: quickap docs -help)
-quickap version           # print version (also: -version)
+quickap                       # overview of all categories, current directory
+quickap ~/Pictures            # ... of another directory
+quickap images                # detailed image report
+quickap images ~/Pictures     # ... for another directory
+quickap docs -list-duplicates # document report + duplicate groups (-ld)
+quickap docs -list-unique     # ... + unique files, i.e. all but dup copies (-lu)
+quickap music -move DIR       # move music duplicate groups into DIR for sorting
+quickap videos -delete        # delete video duplicates, keeping originals
+quickap other                 # detailed report of uncategorized files
+quickap -ignore dist          # skip every dir named "dist" (repeatable, or a,b,c)
+quickap -hidden               # include hidden directories in the scan
+quickap help                  # full help, including per-command flags
+quickap help docs             # help for one command (also: quickap docs -help)
+quickap version               # print version (also: -version)
 ```
 
 The directory to scan defaults to the current one; pass a different one as
@@ -211,7 +211,7 @@ command**; the bare `quickap` command indexes and reports only.
 
 | Flag        | Commands       | Description                                                                                                                 |
 | ----------- | -------------- | --------------------------------------------------------------------------------------------------------------------------|
-| `-list`     | all            | List each duplicate group with file paths. The kept original is marked `✓`, duplicates `✗`.                                 |
+| `-list-duplicates` / `-ld` | all | List each duplicate group with file paths. The kept original is marked `✓`, duplicates `✗`.                            |
 | `-list-unique` / `-lu` | all | List every unique file with its size — exactly what the `unique` column counts: every file that is not a duplicate copy, so a group's kept original is included. |
 | `-move DIR` | category cmds  | Move each duplicate group — **original and copies** — into `DIR/<category>/group-NNN/` for manual side-by-side sorting. `DIR` is created if needed and resolved relative to the scanned directory. |
 | `-delete`   | category cmds  | **Permanently delete** duplicate files, keeping each group's original. No undo. Cannot be combined with `-move`.            |
@@ -240,7 +240,7 @@ quickap images -verbose ~/Pictures    # ... plus scan timing and cache stats
 before changing anything:
 
 ```sh
-quickap images -list                   # see every duplicate group; ✓ = kept
+quickap images -list-duplicates        # see every duplicate group; ✓ = kept
 quickap images -move ../photo-dupes    # move groups out for side-by-side review
 # ...inspect ../photo-dupes/images/group-001/ etc., keep what you want
 ```
@@ -249,7 +249,7 @@ quickap images -move ../photo-dupes    # move groups out for side-by-side review
 just want the space back:
 
 ```sh
-quickap videos -list       # one last look
+quickap videos -ld         # one last look (-ld = -list-duplicates)
 quickap videos -delete     # remove duplicates, keep each group's original
 ```
 
@@ -267,14 +267,14 @@ like `setup(1).exe` — content hashing catches them regardless of name:
 
 ```sh
 cd ~/Downloads
-quickap archives -list
+quickap archives -list-duplicates
 quickap apps -delete
 ```
 
 **Combine freely.** Flags stack on any command:
 
 ```sh
-quickap docs -hidden -list -move ../dupes -verbose
+quickap docs -hidden -ld -move ../dupes -verbose
 quickap music -ignore samples,loops -delete
 ```
 
@@ -307,8 +307,8 @@ Note that `-move` keeps categories separate — `quickap images -move
 - Within a group, the lexically first path counts as the original; the rest
   are duplicates. The "Duplicates" count is the number of redundant copies,
   so a group of 3 identical files counts as 1 original + 2 duplicates.
-  `-list` shows exactly which file each group keeps — review it before
-  running `-delete`.
+  `-list-duplicates` shows exactly which file each group keeps — review it
+  before running `-delete`.
 
 ### The hash cache
 
