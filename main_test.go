@@ -70,7 +70,7 @@ func TestCategoryBySub(t *testing.T) {
 	cases := map[string]string{
 		"images": "images", "docs": "documents", "documents": "documents",
 		"video": "videos", "archive": "archives", "app": "apps",
-		"applications": "apps",
+		"applications": "apps", "other": "other files", "others": "other files",
 	}
 	for sub, key := range cases {
 		cat := categoryBySub(sub)
@@ -80,6 +80,93 @@ func TestCategoryBySub(t *testing.T) {
 	}
 	if categoryBySub("bogus") != nil {
 		t.Error("categoryBySub(bogus) should be nil")
+	}
+}
+
+func TestCategoryMatches(t *testing.T) {
+	images := categoryBySub("images")
+	other := categoryBySub("other")
+	if !images.matches(".jpg") || images.matches(".xyz") || images.matches("") {
+		t.Error("images should match .jpg only")
+	}
+	// other matches exactly the complement of every claimed extension.
+	for _, claimed := range []string{".jpg", ".pdf", ".mp3", ".mkv", ".zip", ".exe"} {
+		if other.matches(claimed) {
+			t.Errorf("other should not match %s — a category claims it", claimed)
+		}
+	}
+	for _, unclaimed := range []string{".xyz", ".json", ".go", ""} {
+		if !other.matches(unclaimed) {
+			t.Errorf("other should match unclaimed extension %q", unclaimed)
+		}
+	}
+}
+
+func TestScanRoutesToOther(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"photo.jpg", "song.mp3", "data.json", "README", "notes.XYZ"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	byCategory, skipped := scan(dir, categories, false, nil)
+	if skipped != 0 {
+		t.Fatalf("skipped = %d, want 0", skipped)
+	}
+	if n := len(byCategory["images"]); n != 1 {
+		t.Errorf("images = %d files, want 1", n)
+	}
+	if n := len(byCategory["music"]); n != 1 {
+		t.Errorf("music = %d files, want 1", n)
+	}
+	got := map[string]bool{}
+	for _, e := range byCategory["other files"] {
+		got[filepath.Base(e.path)] = true
+	}
+	if len(got) != 3 || !got["data.json"] || !got["README"] || !got["notes.XYZ"] {
+		t.Errorf("other files = %v, want data.json, README, notes.XYZ", got)
+	}
+}
+
+func TestScanIgnoresSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "real.jpg"), []byte("jpegdata"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "notes.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real.jpg", filepath.Join(dir, "link.jpg")); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+	if err := os.Symlink("sub", filepath.Join(dir, "dirlink")); err != nil {
+		t.Fatal(err)
+	}
+
+	byCategory, skipped := scan(dir, categories, false, nil)
+	if skipped != 0 {
+		t.Errorf("skipped = %d, want 0 (symlinks should be ignored, not counted)", skipped)
+	}
+	var total int
+	for key, entries := range byCategory {
+		total += len(entries)
+		for _, e := range entries {
+			switch filepath.Base(e.path) {
+			case "link.jpg", "dirlink":
+				t.Errorf("%s: symlink %s was indexed", key, e.path)
+			}
+		}
+	}
+	// Exactly the two regular files: real.jpg and sub/notes.txt.
+	if total != 2 {
+		t.Errorf("indexed %d files, want 2", total)
+	}
+	if n := len(byCategory["images"]); n != 1 {
+		t.Errorf("images = %d files, want 1", n)
 	}
 }
 

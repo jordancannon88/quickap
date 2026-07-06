@@ -1,45 +1,46 @@
-# quickap
+<div align="right">
 
 [![CI](https://github.com/jordancannon88/quickap/actions/workflows/ci.yml/badge.svg)](https://github.com/jordancannon88/quickap/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/jordancannon88/quickap)](https://github.com/jordancannon88/quickap/releases/latest)
 
+</div>
+
 <div align="center">
 
-### ⚡ **quick**ap = **quick cap**ture ⚡
+<img src="assets/logo.svg" alt="quickap logo: a miniature terminal window showing ◆ quickap with a block cursor, above a row of seven colored dots, one for each file category" width="380">
 
-*Say it "quick cap."*
-<br>
-One quick capture of everything in a directory.
+**A fast, zero-dependency CLI for finding out what's in a directory —
+and what's in it twice.**
+
+*⚡ **quick**ap = **quick cap**ture — say it "quick cap": one quick
+capture of everything in a directory.*
+
+<sub>applications · archives · documents · images · videos · music ·
+everything else</sub>
+
+**[Install](#install)** · **[Usage](#usage)** ·
+**[Commands](#commands)** ·
+**[How it works](#how-duplicate-detection-works)** ·
+**[Project wiki](https://github.com/jordancannon88/quickap/wiki)**
 
 </div>
 
-**A fast, zero-dependency CLI for finding out what's in a directory — and
-what's in it twice.**
-
-> [!NOTE]
-> AI was used to help write the code in this project.
-
-quickap indexes **images · documents · music · videos · archives ·
-applications** under any directory and reports totals, per-extension
-stats, and duplicates — in a clean, colorful terminal UI.
-
-- 🔍 **Index** six file categories in one recursive scan
+- 🔍 **Index** seven file categories in one recursive scan — totals and
+  per-extension stats in a clean, colorful terminal UI
 - 👯 **Find duplicates** by content (SHA-256), whatever the file is named
 - 🧹 **Clean up** — list, move for manual sorting, or delete duplicates
 - 📦 **Single binary** — no runtime, no config, Linux/BSD/macOS/Windows
 
-> [!TIP]
-> Beyond this README, the [project wiki](https://github.com/jordancannon88/quickap/wiki)
-> covers the release process, verifying downloads, and the development
-> workflow.
+> [!NOTE]
+> AI was used to help write the code in this project.
 
 ## At a glance
 
 Running `quickap` with no arguments gives a compact overview of every
 category:
 
-<img src="assets/screenshot.svg" alt="quickap overview output: a table of Images, Documents, Music, Videos, Archives, and Applications with file counts, sizes, unique/duplicate counts, and reclaimable space, plus a reclaimable-space meter" width="760">
+<img src="assets/screenshot.svg" alt="quickap overview output: a table of Applications, Archives, Documents, Images, Videos, Music, and Other with file counts, sizes, unique/duplicate counts, and reclaimable space, plus a reclaimable-space meter" width="760">
 
 A category command — here `quickap videos` — gives the detailed view:
 a summary table, a reclaimable-space meter, and a per-extension breakdown
@@ -55,13 +56,14 @@ so what you see is exactly what the tool prints.*
 ## Features
 
 - User-friendly, colorful output — auto-disables when piped or with `NO_COLOR`
-- Six file categories: images, documents, music, videos, archives, applications
+- Seven file categories: applications, archives, documents, images,
+  videos, music, and other — every file the first six don't claim
 - Compact all-categories overview, or detailed per-extension reports with
   two-tone unique/duplicate bars
 - Duplicate detection by content (SHA-256) — catches renamed and
   re-extensioned copies, never false-flags same-size files
 - Hash cache: repeat scans only read new or modified files
-- Clean up duplicates your way: `-list` to review, `-move` into per-group
+- Clean up duplicates your way: `-list-duplicates` to review, `-move` into per-group
   folders for manual sorting, or `-delete` keeping each original
 - Scoped scans: point it at any directory (`quickap images ~/Pictures`),
   `-ignore` directories by name or path, opt into hidden directories
@@ -165,18 +167,20 @@ SHA-256 sums.
 ```sh
 quickap [command] [flags] [directory]
 
-quickap                   # overview of all categories, current directory
-quickap ~/Pictures        # ... of another directory
-quickap images            # detailed image report
-quickap images ~/Pictures # ... for another directory
-quickap docs -list        # document report + duplicate groups
-quickap music -move DIR   # move music duplicate groups into DIR for sorting
-quickap videos -delete    # delete video duplicates, keeping originals
-quickap -ignore dist      # skip every dir named "dist" (repeatable, or a,b,c)
-quickap -hidden           # include hidden directories in the scan
-quickap help              # full help, including per-command flags
-quickap help docs         # help for one command (also: quickap docs -help)
-quickap version           # print version (also: -version)
+quickap                       # overview of all categories, current directory
+quickap ~/Pictures            # ... of another directory
+quickap images                # detailed image report
+quickap images ~/Pictures     # ... for another directory
+quickap docs -list-duplicates # document report + duplicate groups (-ld)
+quickap docs -list-unique     # ... + unique files, i.e. all but dup copies (-lu)
+quickap music -move DIR       # move music duplicate groups into DIR for sorting
+quickap videos -delete        # delete video duplicates, keeping originals
+quickap other                 # detailed report of uncategorized files
+quickap -ignore dist          # skip every dir named "dist" (repeatable, or a,b,c)
+quickap -hidden               # include hidden directories in the scan
+quickap help                  # full help, including per-command flags
+quickap help docs             # help for one command (also: quickap docs -help)
+quickap version               # print version (also: -version)
 ```
 
 The directory to scan defaults to the current one; pass a different one as
@@ -188,12 +192,13 @@ paths resolve against the scanned directory.
 | Command      | Description                                          |
 | ------------ | -----------------------------------------------------|
 | *(none)*     | Index all categories, compact overview.              |
-| `images`     | Index images only.                                   |
-| `docs`       | Index documents only (alias: `documents`).           |
-| `music`      | Index music only.                                    |
-| `videos`     | Index videos only (alias: `video`).                  |
-| `archives`   | Index archives only (alias: `archive`).              |
 | `apps`       | Index applications only (aliases: `app`, `applications`). |
+| `archives`   | Index archives only (alias: `archive`).              |
+| `docs`       | Index documents only (alias: `documents`).           |
+| `images`     | Index images only.                                   |
+| `videos`     | Index videos only (alias: `video`).                  |
+| `music`      | Index music only.                                    |
+| `other`      | Index files no other category claims (alias: `others`). |
 | `help [cmd]` | Show help, or help for one command.                  |
 | `version`    | Print the version.                                   |
 
@@ -206,7 +211,8 @@ command**; the bare `quickap` command indexes and reports only.
 
 | Flag        | Commands       | Description                                                                                                                 |
 | ----------- | -------------- | --------------------------------------------------------------------------------------------------------------------------|
-| `-list`     | all            | List each duplicate group with file paths. The kept original is marked `✓`, duplicates `✗`.                                 |
+| `-list-duplicates` / `-ld` | all | List each duplicate group with file paths. The kept original is marked `✓`, duplicates `✗`.                            |
+| `-list-unique` / `-lu` | all | List every unique file with its size — exactly what the `unique` column counts: every file that is not a duplicate copy, so a group's kept original is included. |
 | `-move DIR` | category cmds  | Move each duplicate group — **original and copies** — into `DIR/<category>/group-NNN/` for manual side-by-side sorting. `DIR` is created if needed and resolved relative to the scanned directory. |
 | `-delete`   | category cmds  | **Permanently delete** duplicate files, keeping each group's original. No undo. Cannot be combined with `-move`.            |
 | `-ignore DIR` | all          | Skip a directory while scanning. A bare name (`node_modules`) skips every directory with that name; a path (`files/cache`) skips that path relative to the scanned directory. Repeat the flag or comma-separate for multiple: `-ignore tunes,media -ignore dist`. |
@@ -234,7 +240,7 @@ quickap images -verbose ~/Pictures    # ... plus scan timing and cache stats
 before changing anything:
 
 ```sh
-quickap images -list                   # see every duplicate group; ✓ = kept
+quickap images -list-duplicates        # see every duplicate group; ✓ = kept
 quickap images -move ../photo-dupes    # move groups out for side-by-side review
 # ...inspect ../photo-dupes/images/group-001/ etc., keep what you want
 ```
@@ -243,7 +249,7 @@ quickap images -move ../photo-dupes    # move groups out for side-by-side review
 just want the space back:
 
 ```sh
-quickap videos -list       # one last look
+quickap videos -ld         # one last look (-ld = -list-duplicates)
 quickap videos -delete     # remove duplicates, keep each group's original
 ```
 
@@ -261,14 +267,14 @@ like `setup(1).exe` — content hashing catches them regardless of name:
 
 ```sh
 cd ~/Downloads
-quickap archives -list
+quickap archives -list-duplicates
 quickap apps -delete
 ```
 
 **Combine freely.** Flags stack on any command:
 
 ```sh
-quickap docs -hidden -list -move ../dupes -verbose
+quickap docs -hidden -ld -move ../dupes -verbose
 quickap music -ignore samples,loops -delete
 ```
 
@@ -301,8 +307,8 @@ Note that `-move` keeps categories separate — `quickap images -move
 - Within a group, the lexically first path counts as the original; the rest
   are duplicates. The "Duplicates" count is the number of redundant copies,
   so a group of 3 identical files counts as 1 original + 2 duplicates.
-  `-list` shows exactly which file each group keeps — review it before
-  running `-delete`.
+  `-list-duplicates` shows exactly which file each group keeps — review it
+  before running `-delete`.
 
 ### The hash cache
 
@@ -335,14 +341,22 @@ changing.
 
 | Category     | Extensions                                                              |
 | ------------ | ------------------------------------------------------------------------|
-| images       | `.avif .bmp .gif .heic .heif .ico .jpeg .jpg .png .svg .tif .tiff .webp` |
-| documents    | `.csv .doc .docx .epub .md .odp .ods .odt .pdf .ppt .pptx .rtf .txt .xls .xlsx` |
-| music        | `.aac .aif .aiff .flac .m4a .mid .midi .mp3 .ogg .opus .wav .wma`       |
-| videos       | `.3gp .avi .flv .m4v .mkv .mov .mp4 .mpeg .mpg .ogv .webm .wmv`         |
-| archives     | `.7z .7zip .bz2 .gz .iso .rar .tar .tbz .tgz .xz .zip .zst`             |
 | apps         | `.apk .appimage .deb .dmg .exe .msi .pkg .rpm`                          |
+| archives     | `.7z .7zip .bz2 .gz .iso .rar .tar .tbz .tgz .xz .zip .zst`             |
+| documents    | `.csv .doc .docx .epub .md .odp .ods .odt .pdf .ppt .pptx .rtf .txt .xls .xlsx` |
+| images       | `.avif .bmp .gif .heic .heif .ico .jpeg .jpg .png .svg .tif .tiff .webp` |
+| videos       | `.3gp .avi .flv .m4v .mkv .mov .mp4 .mpeg .mpg .ogv .webm .wmv`         |
+| music        | `.aac .aif .aiff .flac .m4a .mid .midi .mp3 .ogg .opus .wav .wma`       |
+| other files  | *everything the categories above don't claim, including files with no extension* |
 
 Extensions are matched case-insensitively.
+
+The **other files** category is the exact complement of the rest: any
+file whose extension appears in no list above — `.json`, `.log`, `.go`,
+a dated backup suffix, or no extension at all — lands there, so the
+seven categories together always account for every file in the scan
+(hidden and `-ignore`d directories aside). In its per-extension report,
+extensionless files show as `(none)`.
 
 ## Notes
 
@@ -356,6 +370,10 @@ Extensions are matched case-insensitively.
   Windows).
 - A `-move` target inside the current directory will be re-indexed on the
   next run; use a target outside it (e.g. `../dupes`) to avoid that.
+- Symbolic links (and other non-regular files: sockets, FIFOs, devices)
+  are ignored — never followed, indexed, or hashed — so a link and its
+  target are never flagged as duplicates of each other. A symlinked scan
+  directory itself is resolved to its target before scanning.
 - Unreadable files or directories are skipped and counted in the footer,
   never fatal.
 - Colors turn off automatically when output is piped, or set `NO_COLOR=1`.

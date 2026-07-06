@@ -1,7 +1,8 @@
-// quickap indexes all image and document files under the current directory
-// and prints a per-category summary: total count, count and size per
-// extension, total size, and duplicate statistics based on file content
-// (SHA-256).
+// quickap indexes application, archive, document, image, video, and
+// music files under the current directory — plus an "other" category
+// for every file those don't claim — and prints a per-category
+// summary: total count, count and size per extension, total size, and
+// duplicate statistics based on file content (SHA-256).
 package main
 
 import (
@@ -37,12 +38,18 @@ type category struct {
 
 var categories = []category{
 	{
-		cmd: "images", key: "images", label: "Images", singular: "image", hue: 80,
+		cmd: "apps", key: "apps", label: "Applications", singular: "application", hue: 114,
 		exts: map[string]bool{
-			".jpg": true, ".jpeg": true, ".png": true, ".gif": true,
-			".webp": true, ".bmp": true, ".svg": true, ".tiff": true,
-			".tif": true, ".heic": true, ".heif": true, ".avif": true,
-			".ico": true,
+			".exe": true, ".msi": true, ".dmg": true, ".pkg": true,
+			".deb": true, ".rpm": true, ".appimage": true, ".apk": true,
+		},
+	},
+	{
+		cmd: "archives", key: "archives", label: "Archives", singular: "archive", hue: 179,
+		exts: map[string]bool{
+			".zip": true, ".7z": true, ".7zip": true, ".rar": true,
+			".tar": true, ".gz": true, ".bz2": true, ".xz": true,
+			".zst": true, ".tgz": true, ".tbz": true, ".iso": true,
 		},
 	},
 	{
@@ -55,11 +62,12 @@ var categories = []category{
 		},
 	},
 	{
-		cmd: "music", key: "music", label: "Music", singular: "music", hue: 176,
+		cmd: "images", key: "images", label: "Images", singular: "image", hue: 80,
 		exts: map[string]bool{
-			".mp3": true, ".flac": true, ".wav": true, ".aac": true,
-			".ogg": true, ".m4a": true, ".wma": true, ".opus": true,
-			".aiff": true, ".aif": true, ".mid": true, ".midi": true,
+			".jpg": true, ".jpeg": true, ".png": true, ".gif": true,
+			".webp": true, ".bmp": true, ".svg": true, ".tiff": true,
+			".tif": true, ".heic": true, ".heif": true, ".avif": true,
+			".ico": true,
 		},
 	},
 	{
@@ -71,27 +79,46 @@ var categories = []category{
 		},
 	},
 	{
-		cmd: "archives", key: "archives", label: "Archives", singular: "archive", hue: 179,
+		cmd: "music", key: "music", label: "Music", singular: "music", hue: 176,
 		exts: map[string]bool{
-			".zip": true, ".7z": true, ".7zip": true, ".rar": true,
-			".tar": true, ".gz": true, ".bz2": true, ".xz": true,
-			".zst": true, ".tgz": true, ".tbz": true, ".iso": true,
+			".mp3": true, ".flac": true, ".wav": true, ".aac": true,
+			".ogg": true, ".m4a": true, ".wma": true, ".opus": true,
+			".aiff": true, ".aif": true, ".mid": true, ".midi": true,
 		},
 	},
 	{
-		cmd: "apps", key: "apps", label: "Applications", singular: "application", hue: 114,
-		exts: map[string]bool{
-			".exe": true, ".msi": true, ".dmg": true, ".pkg": true,
-			".deb": true, ".rpm": true, ".appimage": true, ".apk": true,
-		},
+		// exts nil: matches every extension no category above claims.
+		cmd: "other", key: "other files", label: "Other", singular: "other", hue: 250,
 	},
+}
+
+// claimedExts is the union of every concrete category's extension set;
+// the "other" category matches whatever is missing from it.
+var claimedExts = func() map[string]bool {
+	u := map[string]bool{}
+	for _, cat := range categories {
+		for e := range cat.exts {
+			u[e] = true
+		}
+	}
+	return u
+}()
+
+// matches reports whether a file extension belongs to the category. A
+// category without its own extension set (other) claims every extension
+// no concrete category lists — including files with no extension at all.
+func (c category) matches(ext string) bool {
+	if c.exts != nil {
+		return c.exts[ext]
+	}
+	return !claimedExts[ext]
 }
 
 // categoryBySub resolves a subcommand name (or alias) to its category.
 func categoryBySub(sub string) *category {
 	aliases := map[string]string{
 		"documents": "docs", "video": "videos", "archive": "archives",
-		"app": "apps", "applications": "apps",
+		"app": "apps", "applications": "apps", "others": "other",
 	}
 	if a, ok := aliases[sub]; ok {
 		sub = a
@@ -133,10 +160,11 @@ type totals struct {
 }
 
 type catResult struct {
-	cat    category
-	groups [][]*fileEntry
-	stats  map[string]*extStat
-	t      totals
+	cat     category
+	entries []*fileEntry
+	groups  [][]*fileEntry
+	stats   map[string]*extStat
+	t       totals
 }
 
 // ANSI styling, disabled when stdout is not a terminal or NO_COLOR is set.
@@ -265,7 +293,12 @@ func main() {
 	}
 
 	fs := flag.NewFlagSet("quickap "+sub, flag.ExitOnError)
-	listDups := fs.Bool("list", false, "list duplicate groups with file paths")
+	var listDups bool
+	fs.BoolVar(&listDups, "list-duplicates", false, "list duplicate groups with file paths")
+	fs.BoolVar(&listDups, "ld", false, "shorthand for -list-duplicates")
+	var listUnique bool
+	fs.BoolVar(&listUnique, "list-unique", false, "list unique files (every file that is not a duplicate copy) with paths")
+	fs.BoolVar(&listUnique, "lu", false, "shorthand for -list-unique")
 	hidden := fs.Bool("hidden", false, "include hidden directories in the scan")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	var ignores multiFlag
@@ -325,6 +358,10 @@ func main() {
 				err = statErr
 			} else if !info.IsDir() {
 				err = fmt.Errorf("%s is not a directory", rootArg)
+			} else {
+				// WalkDir does not follow symlinks, so a symlinked
+				// root would scan nothing; walk its target instead.
+				root, err = filepath.EvalSymlinks(root)
 			}
 		}
 	}
@@ -373,7 +410,7 @@ func main() {
 				t.uniqSize += e.size
 			}
 		}
-		results = append(results, catResult{cat, groups, stats, t})
+		results = append(results, catResult{cat, entries, groups, stats, t})
 	}
 	cache.save()
 	elapsed := time.Since(start)
@@ -388,7 +425,12 @@ func main() {
 	}
 	renderFooter(skipped, elapsed, hs, verbose)
 
-	if *listDups {
+	if listUnique {
+		for _, r := range results {
+			renderUnique(root, r.cat, r.entries)
+		}
+	}
+	if listDups {
 		for _, r := range results {
 			renderGroups(root, r.cat, r.groups)
 		}
@@ -446,6 +488,8 @@ func ignoredDir(root, path string, patterns []string) bool {
 // scan walks root once and collects every file matching an active category.
 // Hidden directories are skipped unless includeHidden is set, ignored
 // directories always; unreadable entries are counted, not fatal.
+// Non-regular files (symlinks, sockets, FIFOs, devices) are ignored:
+// never followed, indexed, or hashed.
 func scan(root string, active []category, includeHidden bool, ignores []string) (map[string][]*fileEntry, int) {
 	byCategory := map[string][]*fileEntry{}
 	var skipped int
@@ -466,9 +510,15 @@ func scan(root string, active []category, includeHidden bool, ignores []string) 
 			}
 			return nil
 		}
+		if d.Type()&fs.ModeType != 0 {
+			// Symlinks would otherwise be indexed with the link's own
+			// lstat size while hashing follows to the target; skip all
+			// non-regular files instead.
+			return nil
+		}
 		ext := strings.ToLower(filepath.Ext(d.Name()))
 		for _, cat := range active {
-			if !cat.exts[ext] {
+			if !cat.matches(ext) {
 				continue
 			}
 			info, err := d.Info()
@@ -1015,8 +1065,17 @@ func renderSection(cat category, stats map[string]*extStat, t totals) {
 		if s.dup > 0 {
 			dupCell = yellow(fmt.Sprintf("%d", s.dup))
 		}
+		ext := s.ext
+		if ext == "" {
+			ext = "(none)"
+		}
+		// The other category admits arbitrary extensions; keep the
+		// fixed-width table intact for unusually long ones.
+		if max := ew[0] - 2; utf8.RuneCountInString(ext) > max {
+			ext = string([]rune(ext)[:max-1]) + "…"
+		}
 		fmt.Println(tRow(ew, eAligns,
-			c256(cat.hue, s.ext),
+			c256(cat.hue, ext),
 			fmt.Sprintf("%d", s.count), green(fmt.Sprintf("%d", s.uniq)), dupCell,
 			bar, humanSize(s.size)))
 	}
@@ -1083,6 +1142,38 @@ func renderGroups(root string, cat category, groups [][]*fileEntry) {
 	fmt.Println()
 }
 
+// renderUnique prints every unique file with its path and size. Unique
+// matches the tables' unique column: every file that is not a duplicate
+// copy, so a duplicate group's kept original counts as unique.
+func renderUnique(root string, cat category, entries []*fileEntry) {
+	var uniq []*fileEntry
+	for _, e := range entries {
+		if !e.dup {
+			uniq = append(uniq, e)
+		}
+	}
+	sort.Slice(uniq, func(i, j int) bool { return uniq[i].path < uniq[j].path })
+	fmt.Printf("  %s %s\n", c256(cat.hue, "●"),
+		bold(fmt.Sprintf("Unique %s files (%d)", cat.singular, len(uniq))))
+	if len(uniq) == 0 {
+		fmt.Printf("  %s\n\n", dim("no unique "+cat.key+" found"))
+		return
+	}
+	for i, e := range uniq {
+		conn := dim("├")
+		switch {
+		case len(uniq) == 1:
+			conn = dim("─")
+		case i == 0:
+			conn = dim("┌")
+		case i == len(uniq)-1:
+			conn = dim("╰")
+		}
+		fmt.Printf("  %s %s %s\n", conn, relPath(root, e.path), dim("· "+humanSize(e.size)))
+	}
+	fmt.Println()
+}
+
 // cmdHelp holds the help copy for one subcommand.
 type cmdHelp struct {
 	invoke   string // e.g. "quickap images"
@@ -1140,6 +1231,13 @@ var cmdHelps = map[string]cmdHelp{
 		moveDest: "DIR/apps/",
 		actions:  true,
 	},
+	"other": {
+		invoke:   "quickap other",
+		summary:  "index files no other category claims (alias: others)",
+		scope:    "other",
+		moveDest: "DIR/other files/",
+		actions:  true,
+	},
 }
 
 // printCommandBlock prints one subcommand's summary and flags.
@@ -1150,31 +1248,35 @@ func printCommandBlock(c cmdHelp) {
 		scope = ""
 	}
 	h(bold(c.invoke) + dim(" — "+c.summary))
-	h("  " + cyan("-list") + "        list duplicate " + scope + "groups with file paths")
+	h("  " + cyan("-list-duplicates") + " list duplicate " + scope + "groups with file paths")
+	h("                   (shorthand: " + cyan("-ld") + ")")
+	h("  " + cyan("-list-unique") + "     list unique " + scope + "files — every file that is not a")
+	h("                   duplicate copy, as counted by the unique column")
+	h("                   (shorthand: " + cyan("-lu") + ")")
 	if c.actions {
-		h("  " + cyan("-move DIR") + "    move each duplicate " + c.scope + " group (original +")
-		h("               copies) into " + c.moveDest + "group-NNN/ for manual")
-		h("               sorting; DIR is created if needed, resolved relative")
-		h("               to the current directory")
-		h("  " + cyan("-delete") + "      " + red("permanently delete") + " duplicate " + c.scope + " files,")
-		h("               keeping each group's original; excludes -move")
+		h("  " + cyan("-move DIR") + "        move each duplicate " + c.scope + " group (original +")
+		h("                   copies) into " + c.moveDest + "group-NNN/ for manual")
+		h("                   sorting; DIR is created if needed, resolved relative")
+		h("                   to the current directory")
+		h("  " + cyan("-delete") + "          " + red("permanently delete") + " duplicate " + c.scope + " files,")
+		h("                   keeping each group's original; excludes -move")
 	}
-	h("  " + cyan("-ignore DIR") + "  skip a directory while scanning; a bare name")
-	h("               (node_modules) skips every dir with that name, a path")
-	h("               (files/cache) skips that path relative to the current")
-	h("               directory; repeat or comma-separate for multiple")
-	h("  " + cyan("-hidden") + "      include hidden directories (.foo/) in the scan")
-	h("  " + cyan("-no-cache") + "    disable the hash cache for this run")
-	h("  " + cyan("-verify") + "      re-hash all duplicate candidates, ignoring cached")
-	h("               hashes (the cache is still updated)")
-	h("  " + cyan("-clear-cache") + " delete the hash cache entirely and exit; the next")
-	h("               scan re-hashes from scratch")
-	h("  " + cyan("-spacious") + "    add vertical space between table rows for easier")
-	h("               reading (default is compact)")
-	h("  " + cyan("-verbose") + "     show scan details: timing, hash-cache stats, and")
-	h("               hints (shorthand: " + cyan("-vv") + ")")
-	h("  " + cyan("-version") + "     print version and exit")
-	h("  " + cyan("-help") + "        show help for this command")
+	h("  " + cyan("-ignore DIR") + "      skip a directory while scanning; a bare name")
+	h("                   (node_modules) skips every dir with that name, a path")
+	h("                   (files/cache) skips that path relative to the current")
+	h("                   directory; repeat or comma-separate for multiple")
+	h("  " + cyan("-hidden") + "          include hidden directories (.foo/) in the scan")
+	h("  " + cyan("-no-cache") + "        disable the hash cache for this run")
+	h("  " + cyan("-verify") + "          re-hash all duplicate candidates, ignoring cached")
+	h("                   hashes (the cache is still updated)")
+	h("  " + cyan("-clear-cache") + "     delete the hash cache entirely and exit; the next")
+	h("                   scan re-hashes from scratch")
+	h("  " + cyan("-spacious") + "        add vertical space between table rows for easier")
+	h("                   reading (default is compact)")
+	h("  " + cyan("-verbose") + "         show scan details: timing, hash-cache stats, and")
+	h("                   hints (shorthand: " + cyan("-vv") + ")")
+	h("  " + cyan("-version") + "         print version and exit")
+	h("  " + cyan("-help") + "            show help for this command")
 }
 
 // printCommandHelp prints help for a single subcommand.
@@ -1202,68 +1304,80 @@ func printHelp() {
 	h(bold(magenta("USAGE")))
 	h("  quickap [command] [flags] [directory]")
 	fmt.Println()
-	h("  Indexes image, document, music, video, archive, and application")
-	h("  files under a directory (recursive) — the current one by default,")
-	h("  or the directory given as the last argument. The bare command")
-	h("  prints a compact overview of every category; a category command")
-	h("  prints detailed per-extension stats and enables -move/-delete.")
+	h("  Indexes application, archive, document, image, video, and music")
+	h("  files under a directory (recursive), plus an \"other\" category")
+	h("  for every file outside those — the current directory by default,")
+	h("  or the one given as the last argument. The bare command prints a")
+	h("  compact overview of every category; a category command prints")
+	h("  detailed per-extension stats and enables -move/-delete.")
 	fmt.Println()
 	h(bold(magenta("COMMANDS")))
 	h("  " + cyan("(none)") + "       index all categories, compact overview")
-	h("  " + cyan("images") + "       index images only")
-	h("  " + cyan("docs") + "         index documents only (alias: documents)")
-	h("  " + cyan("music") + "        index music only")
-	h("  " + cyan("videos") + "       index videos only (alias: video)")
-	h("  " + cyan("archives") + "     index archives only (alias: archive)")
 	h("  " + cyan("apps") + "         index applications only (aliases: app, applications)")
+	h("  " + cyan("archives") + "     index archives only (alias: archive)")
+	h("  " + cyan("docs") + "         index documents only (alias: documents)")
+	h("  " + cyan("images") + "       index images only")
+	h("  " + cyan("videos") + "       index videos only (alias: video)")
+	h("  " + cyan("music") + "        index music only")
+	h("  " + cyan("other") + "        index files no other category claims (alias: others)")
 	h("  " + cyan("help [cmd]") + "   show this help, or help for one command")
 	h("  " + cyan("version") + "      print version")
 	fmt.Println()
 	h(bold(magenta("FLAGS")))
 	h("  Every command accepts these:")
 	fmt.Println()
-	h("  " + cyan("-list") + "        list duplicate groups with file paths")
-	h("  " + cyan("-ignore DIR") + "  skip a directory while scanning; a bare name")
-	h("               (node_modules) skips every dir with that name, a path")
-	h("               (files/cache) skips that path relative to the current")
-	h("               directory; repeat or comma-separate for multiple")
-	h("  " + cyan("-hidden") + "      include hidden directories (.foo/) in the scan")
-	h("  " + cyan("-no-cache") + "    disable the hash cache for this run")
-	h("  " + cyan("-verify") + "      re-hash all duplicate candidates, ignoring cached")
-	h("               hashes (the cache is still updated)")
-	h("  " + cyan("-clear-cache") + " delete the hash cache entirely and exit; the next")
-	h("               scan re-hashes from scratch")
-	h("  " + cyan("-spacious") + "    add vertical space between table rows for easier")
-	h("               reading (default is compact)")
-	h("  " + cyan("-verbose") + "     show scan details: timing, hash-cache stats, and")
-	h("               hints (shorthand: " + cyan("-vv") + ")")
-	h("  " + cyan("-version") + "     print version and exit")
-	h("  " + cyan("-help") + "        show help for the current command")
+	h("  " + cyan("-list-duplicates") + " list duplicate groups with file paths")
+	h("                   (shorthand: " + cyan("-ld") + ")")
+	h("  " + cyan("-list-unique") + "     list unique files — every file that is not a duplicate")
+	h("                   copy, as counted by the unique column (shorthand: " + cyan("-lu") + ")")
+	h("  " + cyan("-ignore DIR") + "      skip a directory while scanning; a bare name")
+	h("                   (node_modules) skips every dir with that name, a path")
+	h("                   (files/cache) skips that path relative to the current")
+	h("                   directory; repeat or comma-separate for multiple")
+	h("  " + cyan("-hidden") + "          include hidden directories (.foo/) in the scan")
+	h("  " + cyan("-no-cache") + "        disable the hash cache for this run")
+	h("  " + cyan("-verify") + "          re-hash all duplicate candidates, ignoring cached")
+	h("                   hashes (the cache is still updated)")
+	h("  " + cyan("-clear-cache") + "     delete the hash cache entirely and exit; the next")
+	h("                   scan re-hashes from scratch")
+	h("  " + cyan("-spacious") + "        add vertical space between table rows for easier")
+	h("                   reading (default is compact)")
+	h("  " + cyan("-verbose") + "         show scan details: timing, hash-cache stats, and")
+	h("                   hints (shorthand: " + cyan("-vv") + ")")
+	h("  " + cyan("-version") + "         print version and exit")
+	h("  " + cyan("-help") + "            show help for the current command")
 	fmt.Println()
 	h("  The cleanup flags work on one category at a time, so they need a")
 	h("  category command — e.g. " + cyan("quickap images -delete") + ":")
 	fmt.Println()
-	h("  " + cyan("-move DIR") + "    move each duplicate group (original + copies) into")
-	h("               DIR/<category>/group-NNN/ for manual sorting; DIR is")
-	h("               created if needed, resolved relative to the scanned")
-	h("               directory")
-	h("  " + cyan("-delete") + "      " + red("permanently delete") + " duplicate files, keeping each")
-	h("               group's original; excludes -move")
+	h("  " + cyan("-move DIR") + "        move each duplicate group (original + copies) into")
+	h("                   DIR/<category>/group-NNN/ for manual sorting; DIR is")
+	h("                   created if needed, resolved relative to the scanned")
+	h("                   directory")
+	h("  " + cyan("-delete") + "          " + red("permanently delete") + " duplicate files, keeping each")
+	h("                   group's original; excludes -move")
 	fmt.Println()
 	h(bold(magenta("NOTES")))
 	h("  · duplicates are byte-identical files (SHA-256), regardless of name")
 	h("    or extension; the lexically first path counts as the original")
 	for _, cat := range categories {
-		h(fmt.Sprintf("  · %-11s %s", cat.key+":", strings.Join(sortedExts(cat), " ")))
+		if cat.exts == nil {
+			h(fmt.Sprintf("  · %-13s every file the categories above don't claim,", cat.key+":"))
+			h("                    including files with no extension")
+			continue
+		}
+		h(fmt.Sprintf("  · %-13s %s", cat.key+":", strings.Join(sortedExts(cat), " ")))
 	}
 	h("  · -move and -delete act on one category at a time, so they require")
 	h("    a category command: quickap images -delete, quickap docs -move DIR")
 	h("  · hidden directories (.git, ...) are skipped unless -hidden is set")
+	h("  · symbolic links are ignored (never followed, indexed, or hashed);")
+	h("    a symlinked scan directory is resolved to its target first")
 	h("  · computed hashes are cached (per scan directory, keyed by file size")
 	h("    and mtime) so unchanged files are never re-read; repeat runs only")
 	h("    hash new or modified files — use -verify to force a full re-hash")
-	h("  · " + yellow("-delete is permanent") + " — there is no undo; run -list first to")
-	h("    review, or use -move to sort manually instead")
+	h("  · " + yellow("-delete is permanent") + " — there is no undo; run -list-duplicates")
+	h("    first to review, or use -move to sort manually instead")
 	h("  · -move modifies your files — the summary report always shows the")
 	h("    state before moving; colliding filenames within a group get a")
 	h("    numeric suffix (a.jpg, a-2.jpg)")
