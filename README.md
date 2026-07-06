@@ -21,10 +21,10 @@ what's in it twice.**
 > AI was used to help write the code in this project.
 
 quickap indexes **images · documents · music · videos · archives ·
-applications** under any directory and reports totals, per-extension
-stats, and duplicates — in a clean, colorful terminal UI.
+applications · everything else** under any directory and reports totals,
+per-extension stats, and duplicates — in a clean, colorful terminal UI.
 
-- 🔍 **Index** six file categories in one recursive scan
+- 🔍 **Index** seven file categories in one recursive scan
 - 👯 **Find duplicates** by content (SHA-256), whatever the file is named
 - 🧹 **Clean up** — list, move for manual sorting, or delete duplicates
 - 📦 **Single binary** — no runtime, no config, Linux/BSD/macOS/Windows
@@ -39,7 +39,7 @@ stats, and duplicates — in a clean, colorful terminal UI.
 Running `quickap` with no arguments gives a compact overview of every
 category:
 
-<img src="assets/screenshot.svg" alt="quickap overview output: a table of Images, Documents, Music, Videos, Archives, and Applications with file counts, sizes, unique/duplicate counts, and reclaimable space, plus a reclaimable-space meter" width="760">
+<img src="assets/screenshot.svg" alt="quickap overview output: a table of Images, Documents, Music, Videos, Archives, Applications, and Other files with file counts, sizes, unique/duplicate counts, and reclaimable space, plus a reclaimable-space meter" width="760">
 
 A category command — here `quickap videos` — gives the detailed view:
 a summary table, a reclaimable-space meter, and a per-extension breakdown
@@ -55,7 +55,8 @@ so what you see is exactly what the tool prints.*
 ## Features
 
 - User-friendly, colorful output — auto-disables when piped or with `NO_COLOR`
-- Six file categories: images, documents, music, videos, archives, applications
+- Seven file categories: images, documents, music, videos, archives,
+  applications, and other — every file the first six don't claim
 - Compact all-categories overview, or detailed per-extension reports with
   two-tone unique/duplicate bars
 - Duplicate detection by content (SHA-256) — catches renamed and
@@ -172,6 +173,7 @@ quickap images ~/Pictures # ... for another directory
 quickap docs -list        # document report + duplicate groups
 quickap music -move DIR   # move music duplicate groups into DIR for sorting
 quickap videos -delete    # delete video duplicates, keeping originals
+quickap other             # detailed report of uncategorized files
 quickap -ignore dist      # skip every dir named "dist" (repeatable, or a,b,c)
 quickap -hidden           # include hidden directories in the scan
 quickap help              # full help, including per-command flags
@@ -194,6 +196,7 @@ paths resolve against the scanned directory.
 | `videos`     | Index videos only (alias: `video`).                  |
 | `archives`   | Index archives only (alias: `archive`).              |
 | `apps`       | Index applications only (aliases: `app`, `applications`). |
+| `other`      | Index files no other category claims (alias: `others`). |
 | `help [cmd]` | Show help, or help for one command.                  |
 | `version`    | Print the version.                                   |
 
@@ -341,8 +344,16 @@ changing.
 | videos       | `.3gp .avi .flv .m4v .mkv .mov .mp4 .mpeg .mpg .ogv .webm .wmv`         |
 | archives     | `.7z .7zip .bz2 .gz .iso .rar .tar .tbz .tgz .xz .zip .zst`             |
 | apps         | `.apk .appimage .deb .dmg .exe .msi .pkg .rpm`                          |
+| other files  | *everything the categories above don't claim, including files with no extension* |
 
 Extensions are matched case-insensitively.
+
+The **other files** category is the exact complement of the rest: any
+file whose extension appears in no list above — `.json`, `.log`, `.go`,
+a dated backup suffix, or no extension at all — lands there, so the
+seven categories together always account for every file in the scan
+(hidden and `-ignore`d directories aside). In its per-extension report,
+extensionless files show as `(none)`.
 
 ## Notes
 

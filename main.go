@@ -1,7 +1,8 @@
-// quickap indexes all image and document files under the current directory
-// and prints a per-category summary: total count, count and size per
-// extension, total size, and duplicate statistics based on file content
-// (SHA-256).
+// quickap indexes image, document, music, video, archive, and
+// application files under the current directory — plus an "other"
+// category for every file those don't claim — and prints a per-category
+// summary: total count, count and size per extension, total size, and
+// duplicate statistics based on file content (SHA-256).
 package main
 
 import (
@@ -85,13 +86,39 @@ var categories = []category{
 			".deb": true, ".rpm": true, ".appimage": true, ".apk": true,
 		},
 	},
+	{
+		// exts nil: matches every extension no category above claims.
+		cmd: "other", key: "other files", label: "Other files", singular: "other", hue: 250,
+	},
+}
+
+// claimedExts is the union of every concrete category's extension set;
+// the "other" category matches whatever is missing from it.
+var claimedExts = func() map[string]bool {
+	u := map[string]bool{}
+	for _, cat := range categories {
+		for e := range cat.exts {
+			u[e] = true
+		}
+	}
+	return u
+}()
+
+// matches reports whether a file extension belongs to the category. A
+// category without its own extension set (other) claims every extension
+// no concrete category lists — including files with no extension at all.
+func (c category) matches(ext string) bool {
+	if c.exts != nil {
+		return c.exts[ext]
+	}
+	return !claimedExts[ext]
 }
 
 // categoryBySub resolves a subcommand name (or alias) to its category.
 func categoryBySub(sub string) *category {
 	aliases := map[string]string{
 		"documents": "docs", "video": "videos", "archive": "archives",
-		"app": "apps", "applications": "apps",
+		"app": "apps", "applications": "apps", "others": "other",
 	}
 	if a, ok := aliases[sub]; ok {
 		sub = a
@@ -468,7 +495,7 @@ func scan(root string, active []category, includeHidden bool, ignores []string) 
 		}
 		ext := strings.ToLower(filepath.Ext(d.Name()))
 		for _, cat := range active {
-			if !cat.exts[ext] {
+			if !cat.matches(ext) {
 				continue
 			}
 			info, err := d.Info()
@@ -1015,8 +1042,17 @@ func renderSection(cat category, stats map[string]*extStat, t totals) {
 		if s.dup > 0 {
 			dupCell = yellow(fmt.Sprintf("%d", s.dup))
 		}
+		ext := s.ext
+		if ext == "" {
+			ext = "(none)"
+		}
+		// The other category admits arbitrary extensions; keep the
+		// fixed-width table intact for unusually long ones.
+		if max := ew[0] - 2; utf8.RuneCountInString(ext) > max {
+			ext = string([]rune(ext)[:max-1]) + "…"
+		}
 		fmt.Println(tRow(ew, eAligns,
-			c256(cat.hue, s.ext),
+			c256(cat.hue, ext),
 			fmt.Sprintf("%d", s.count), green(fmt.Sprintf("%d", s.uniq)), dupCell,
 			bar, humanSize(s.size)))
 	}
@@ -1140,6 +1176,13 @@ var cmdHelps = map[string]cmdHelp{
 		moveDest: "DIR/apps/",
 		actions:  true,
 	},
+	"other": {
+		invoke:   "quickap other",
+		summary:  "index files no other category claims (alias: others)",
+		scope:    "other",
+		moveDest: "DIR/other files/",
+		actions:  true,
+	},
 }
 
 // printCommandBlock prints one subcommand's summary and flags.
@@ -1203,10 +1246,11 @@ func printHelp() {
 	h("  quickap [command] [flags] [directory]")
 	fmt.Println()
 	h("  Indexes image, document, music, video, archive, and application")
-	h("  files under a directory (recursive) — the current one by default,")
-	h("  or the directory given as the last argument. The bare command")
-	h("  prints a compact overview of every category; a category command")
-	h("  prints detailed per-extension stats and enables -move/-delete.")
+	h("  files under a directory (recursive), plus an \"other\" category")
+	h("  for every file outside those — the current directory by default,")
+	h("  or the one given as the last argument. The bare command prints a")
+	h("  compact overview of every category; a category command prints")
+	h("  detailed per-extension stats and enables -move/-delete.")
 	fmt.Println()
 	h(bold(magenta("COMMANDS")))
 	h("  " + cyan("(none)") + "       index all categories, compact overview")
@@ -1216,6 +1260,7 @@ func printHelp() {
 	h("  " + cyan("videos") + "       index videos only (alias: video)")
 	h("  " + cyan("archives") + "     index archives only (alias: archive)")
 	h("  " + cyan("apps") + "         index applications only (aliases: app, applications)")
+	h("  " + cyan("other") + "        index files no other category claims (alias: others)")
 	h("  " + cyan("help [cmd]") + "   show this help, or help for one command")
 	h("  " + cyan("version") + "      print version")
 	fmt.Println()
@@ -1254,7 +1299,12 @@ func printHelp() {
 	h("  · duplicates are byte-identical files (SHA-256), regardless of name")
 	h("    or extension; the lexically first path counts as the original")
 	for _, cat := range categories {
-		h(fmt.Sprintf("  · %-11s %s", cat.key+":", strings.Join(sortedExts(cat), " ")))
+		if cat.exts == nil {
+			h(fmt.Sprintf("  · %-13s every file the categories above don't claim,", cat.key+":"))
+			h("                    including files with no extension")
+			continue
+		}
+		h(fmt.Sprintf("  · %-13s %s", cat.key+":", strings.Join(sortedExts(cat), " ")))
 	}
 	h("  · -move and -delete act on one category at a time, so they require")
 	h("    a category command: quickap images -delete, quickap docs -move DIR")
