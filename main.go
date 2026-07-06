@@ -160,10 +160,11 @@ type totals struct {
 }
 
 type catResult struct {
-	cat    category
-	groups [][]*fileEntry
-	stats  map[string]*extStat
-	t      totals
+	cat     category
+	entries []*fileEntry
+	groups  [][]*fileEntry
+	stats   map[string]*extStat
+	t       totals
 }
 
 // ANSI styling, disabled when stdout is not a terminal or NO_COLOR is set.
@@ -293,6 +294,9 @@ func main() {
 
 	fs := flag.NewFlagSet("quickap "+sub, flag.ExitOnError)
 	listDups := fs.Bool("list", false, "list duplicate groups with file paths")
+	var listUnique bool
+	fs.BoolVar(&listUnique, "list-unique", false, "list unique files (every file that is not a duplicate copy) with paths")
+	fs.BoolVar(&listUnique, "lu", false, "shorthand for -list-unique")
 	hidden := fs.Bool("hidden", false, "include hidden directories in the scan")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	var ignores multiFlag
@@ -404,7 +408,7 @@ func main() {
 				t.uniqSize += e.size
 			}
 		}
-		results = append(results, catResult{cat, groups, stats, t})
+		results = append(results, catResult{cat, entries, groups, stats, t})
 	}
 	cache.save()
 	elapsed := time.Since(start)
@@ -419,6 +423,11 @@ func main() {
 	}
 	renderFooter(skipped, elapsed, hs, verbose)
 
+	if listUnique {
+		for _, r := range results {
+			renderUnique(root, r.cat, r.entries)
+		}
+	}
 	if *listDups {
 		for _, r := range results {
 			renderGroups(root, r.cat, r.groups)
@@ -1131,6 +1140,38 @@ func renderGroups(root string, cat category, groups [][]*fileEntry) {
 	fmt.Println()
 }
 
+// renderUnique prints every unique file with its path and size. Unique
+// matches the tables' unique column: every file that is not a duplicate
+// copy, so a duplicate group's kept original counts as unique.
+func renderUnique(root string, cat category, entries []*fileEntry) {
+	var uniq []*fileEntry
+	for _, e := range entries {
+		if !e.dup {
+			uniq = append(uniq, e)
+		}
+	}
+	sort.Slice(uniq, func(i, j int) bool { return uniq[i].path < uniq[j].path })
+	fmt.Printf("  %s %s\n", c256(cat.hue, "●"),
+		bold(fmt.Sprintf("Unique %s files (%d)", cat.singular, len(uniq))))
+	if len(uniq) == 0 {
+		fmt.Printf("  %s\n\n", dim("no unique "+cat.key+" found"))
+		return
+	}
+	for i, e := range uniq {
+		conn := dim("├")
+		switch {
+		case len(uniq) == 1:
+			conn = dim("─")
+		case i == 0:
+			conn = dim("┌")
+		case i == len(uniq)-1:
+			conn = dim("╰")
+		}
+		fmt.Printf("  %s %s %s\n", conn, relPath(root, e.path), dim("· "+humanSize(e.size)))
+	}
+	fmt.Println()
+}
+
 // cmdHelp holds the help copy for one subcommand.
 type cmdHelp struct {
 	invoke   string // e.g. "quickap images"
@@ -1206,6 +1247,9 @@ func printCommandBlock(c cmdHelp) {
 	}
 	h(bold(c.invoke) + dim(" — "+c.summary))
 	h("  " + cyan("-list") + "        list duplicate " + scope + "groups with file paths")
+	h("  " + cyan("-list-unique") + " list unique " + scope + "files — every file that is not a")
+	h("               duplicate copy, as counted by the unique column")
+	h("               (shorthand: " + cyan("-lu") + ")")
 	if c.actions {
 		h("  " + cyan("-move DIR") + "    move each duplicate " + c.scope + " group (original +")
 		h("               copies) into " + c.moveDest + "group-NNN/ for manual")
@@ -1280,6 +1324,8 @@ func printHelp() {
 	h("  Every command accepts these:")
 	fmt.Println()
 	h("  " + cyan("-list") + "        list duplicate groups with file paths")
+	h("  " + cyan("-list-unique") + " list unique files — every file that is not a duplicate")
+	h("               copy, as counted by the unique column (shorthand: " + cyan("-lu") + ")")
 	h("  " + cyan("-ignore DIR") + "  skip a directory while scanning; a bare name")
 	h("               (node_modules) skips every dir with that name, a path")
 	h("               (files/cache) skips that path relative to the current")
