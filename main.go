@@ -1,6 +1,6 @@
-// quickap indexes image, document, music, video, archive, and
-// application files under the current directory — plus an "other"
-// category for every file those don't claim — and prints a per-category
+// quickap indexes application, archive, document, image, video, and
+// music files under the current directory — plus an "other" category
+// for every file those don't claim — and prints a per-category
 // summary: total count, count and size per extension, total size, and
 // duplicate statistics based on file content (SHA-256).
 package main
@@ -38,12 +38,18 @@ type category struct {
 
 var categories = []category{
 	{
-		cmd: "images", key: "images", label: "Images", singular: "image", hue: 80,
+		cmd: "apps", key: "apps", label: "Applications", singular: "application", hue: 114,
 		exts: map[string]bool{
-			".jpg": true, ".jpeg": true, ".png": true, ".gif": true,
-			".webp": true, ".bmp": true, ".svg": true, ".tiff": true,
-			".tif": true, ".heic": true, ".heif": true, ".avif": true,
-			".ico": true,
+			".exe": true, ".msi": true, ".dmg": true, ".pkg": true,
+			".deb": true, ".rpm": true, ".appimage": true, ".apk": true,
+		},
+	},
+	{
+		cmd: "archives", key: "archives", label: "Archives", singular: "archive", hue: 179,
+		exts: map[string]bool{
+			".zip": true, ".7z": true, ".7zip": true, ".rar": true,
+			".tar": true, ".gz": true, ".bz2": true, ".xz": true,
+			".zst": true, ".tgz": true, ".tbz": true, ".iso": true,
 		},
 	},
 	{
@@ -56,11 +62,12 @@ var categories = []category{
 		},
 	},
 	{
-		cmd: "music", key: "music", label: "Music", singular: "music", hue: 176,
+		cmd: "images", key: "images", label: "Images", singular: "image", hue: 80,
 		exts: map[string]bool{
-			".mp3": true, ".flac": true, ".wav": true, ".aac": true,
-			".ogg": true, ".m4a": true, ".wma": true, ".opus": true,
-			".aiff": true, ".aif": true, ".mid": true, ".midi": true,
+			".jpg": true, ".jpeg": true, ".png": true, ".gif": true,
+			".webp": true, ".bmp": true, ".svg": true, ".tiff": true,
+			".tif": true, ".heic": true, ".heif": true, ".avif": true,
+			".ico": true,
 		},
 	},
 	{
@@ -72,18 +79,11 @@ var categories = []category{
 		},
 	},
 	{
-		cmd: "archives", key: "archives", label: "Archives", singular: "archive", hue: 179,
+		cmd: "music", key: "music", label: "Music", singular: "music", hue: 176,
 		exts: map[string]bool{
-			".zip": true, ".7z": true, ".7zip": true, ".rar": true,
-			".tar": true, ".gz": true, ".bz2": true, ".xz": true,
-			".zst": true, ".tgz": true, ".tbz": true, ".iso": true,
-		},
-	},
-	{
-		cmd: "apps", key: "apps", label: "Applications", singular: "application", hue: 114,
-		exts: map[string]bool{
-			".exe": true, ".msi": true, ".dmg": true, ".pkg": true,
-			".deb": true, ".rpm": true, ".appimage": true, ".apk": true,
+			".mp3": true, ".flac": true, ".wav": true, ".aac": true,
+			".ogg": true, ".m4a": true, ".wma": true, ".opus": true,
+			".aiff": true, ".aif": true, ".mid": true, ".midi": true,
 		},
 	},
 	{
@@ -1304,7 +1304,7 @@ func printHelp() {
 	h(bold(magenta("USAGE")))
 	h("  quickap [command] [flags] [directory]")
 	fmt.Println()
-	h("  Indexes image, document, music, video, archive, and application")
+	h("  Indexes application, archive, document, image, video, and music")
 	h("  files under a directory (recursive), plus an \"other\" category")
 	h("  for every file outside those — the current directory by default,")
 	h("  or the one given as the last argument. The bare command prints a")
@@ -1313,12 +1313,12 @@ func printHelp() {
 	fmt.Println()
 	h(bold(magenta("COMMANDS")))
 	h("  " + cyan("(none)") + "       index all categories, compact overview")
-	h("  " + cyan("images") + "       index images only")
-	h("  " + cyan("docs") + "         index documents only (alias: documents)")
-	h("  " + cyan("music") + "        index music only")
-	h("  " + cyan("videos") + "       index videos only (alias: video)")
-	h("  " + cyan("archives") + "     index archives only (alias: archive)")
 	h("  " + cyan("apps") + "         index applications only (aliases: app, applications)")
+	h("  " + cyan("archives") + "     index archives only (alias: archive)")
+	h("  " + cyan("docs") + "         index documents only (alias: documents)")
+	h("  " + cyan("images") + "       index images only")
+	h("  " + cyan("videos") + "       index videos only (alias: video)")
+	h("  " + cyan("music") + "        index music only")
 	h("  " + cyan("other") + "        index files no other category claims (alias: others)")
 	h("  " + cyan("help [cmd]") + "   show this help, or help for one command")
 	h("  " + cyan("version") + "      print version")

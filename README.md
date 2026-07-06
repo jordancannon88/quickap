@@ -16,7 +16,7 @@ and what's in it twice.**
 *⚡ **quick**ap = **quick cap**ture — say it "quick cap": one quick
 capture of everything in a directory.*
 
-<sub>images · documents · music · videos · archives · applications ·
+<sub>applications · archives · documents · images · videos · music ·
 everything else</sub>
 
 **[Install](#install)** · **[Usage](#usage)** ·
@@ -40,7 +40,7 @@ everything else</sub>
 Running `quickap` with no arguments gives a compact overview of every
 category:
 
-<img src="assets/screenshot.svg" alt="quickap overview output: a table of Images, Documents, Music, Videos, Archives, Applications, and Other with file counts, sizes, unique/duplicate counts, and reclaimable space, plus a reclaimable-space meter" width="760">
+<img src="assets/screenshot.svg" alt="quickap overview output: a table of Applications, Archives, Documents, Images, Videos, Music, and Other with file counts, sizes, unique/duplicate counts, and reclaimable space, plus a reclaimable-space meter" width="760">
 
 A category command — here `quickap videos` — gives the detailed view:
 a summary table, a reclaimable-space meter, and a per-extension breakdown
@@ -56,8 +56,8 @@ so what you see is exactly what the tool prints.*
 ## Features
 
 - User-friendly, colorful output — auto-disables when piped or with `NO_COLOR`
-- Seven file categories: images, documents, music, videos, archives,
-  applications, and other — every file the first six don't claim
+- Seven file categories: applications, archives, documents, images,
+  videos, music, and other — every file the first six don't claim
 - Compact all-categories overview, or detailed per-extension reports with
   two-tone unique/duplicate bars
 - Duplicate detection by content (SHA-256) — catches renamed and
@@ -192,12 +192,12 @@ paths resolve against the scanned directory.
 | Command      | Description                                          |
 | ------------ | -----------------------------------------------------|
 | *(none)*     | Index all categories, compact overview.              |
-| `images`     | Index images only.                                   |
-| `docs`       | Index documents only (alias: `documents`).           |
-| `music`      | Index music only.                                    |
-| `videos`     | Index videos only (alias: `video`).                  |
-| `archives`   | Index archives only (alias: `archive`).              |
 | `apps`       | Index applications only (aliases: `app`, `applications`). |
+| `archives`   | Index archives only (alias: `archive`).              |
+| `docs`       | Index documents only (alias: `documents`).           |
+| `images`     | Index images only.                                   |
+| `videos`     | Index videos only (alias: `video`).                  |
+| `music`      | Index music only.                                    |
 | `other`      | Index files no other category claims (alias: `others`). |
 | `help [cmd]` | Show help, or help for one command.                  |
 | `version`    | Print the version.                                   |
@@ -341,12 +341,12 @@ changing.
 
 | Category     | Extensions                                                              |
 | ------------ | ------------------------------------------------------------------------|
-| images       | `.avif .bmp .gif .heic .heif .ico .jpeg .jpg .png .svg .tif .tiff .webp` |
-| documents    | `.csv .doc .docx .epub .md .odp .ods .odt .pdf .ppt .pptx .rtf .txt .xls .xlsx` |
-| music        | `.aac .aif .aiff .flac .m4a .mid .midi .mp3 .ogg .opus .wav .wma`       |
-| videos       | `.3gp .avi .flv .m4v .mkv .mov .mp4 .mpeg .mpg .ogv .webm .wmv`         |
-| archives     | `.7z .7zip .bz2 .gz .iso .rar .tar .tbz .tgz .xz .zip .zst`             |
 | apps         | `.apk .appimage .deb .dmg .exe .msi .pkg .rpm`                          |
+| archives     | `.7z .7zip .bz2 .gz .iso .rar .tar .tbz .tgz .xz .zip .zst`             |
+| documents    | `.csv .doc .docx .epub .md .odp .ods .odt .pdf .ppt .pptx .rtf .txt .xls .xlsx` |
+| images       | `.avif .bmp .gif .heic .heif .ico .jpeg .jpg .png .svg .tif .tiff .webp` |
+| videos       | `.3gp .avi .flv .m4v .mkv .mov .mp4 .mpeg .mpg .ogv .webm .wmv`         |
+| music        | `.aac .aif .aiff .flac .m4a .mid .midi .mp3 .ogg .opus .wav .wma`       |
 | other files  | *everything the categories above don't claim, including files with no extension* |
 
 Extensions are matched case-insensitively.
