@@ -416,6 +416,24 @@ extensionless files show as `(none)`.
   never fatal.
 - Colors turn off automatically when output is piped, or set `NO_COLOR=1`.
 
+## Contributing
+
+Contributions are welcome! **Before opening a PR, please open an
+[issue](https://github.com/jordancannon88/quickap/issues) first** to
+discuss your idea and get feedback from maintainers.
+
+TL;DR:
+
+1. Open an issue describing the bug or the feature you'd like to build.
+2. Fork, branch from `dev`, make the change — standard library only,
+   no new dependencies.
+3. Run `go vet ./...` and `go test ./...`; keep the docs (README,
+   `quickap.1`, built-in help) in sync with user-facing changes.
+4. Open a PR against `dev`, linking the issue.
+
+The full guide lives in [CONTRIBUTING.md](CONTRIBUTING.md) and on the
+[Contributing wiki page](https://github.com/jordancannon88/quickap/wiki/Contributing).
+
 ## License
 
 [AGPL-3.0](LICENSE) — GNU Affero General Public License v3.0.
