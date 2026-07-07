@@ -41,6 +41,7 @@ jobs:
               -ldflags="-s -w -X main.version=${GITHUB_REF_NAME#v}" \
               -o "dist/quickap-${goos}-${goarch}${ext}" .
           done
+          cp quickap.1 dist/
           ls -la dist/
 
       - name: Checksums

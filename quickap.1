@@ -1,0 +1,381 @@
+.TH QUICKAP 1 "July 2026" "quickap 1.4.0" "User Commands"
+.SH NAME
+quickap \- file indexer with content-based duplicate detection
+.SH SYNOPSIS
+.B quickap
+.RI [ command ]
+.RI [ flags ]
+.RI [ directory ]
+.br
+.B quickap help
+.RI [ command ]
+.br
+.B quickap version
+.SH DESCRIPTION
+.B quickap
+recursively indexes application, archive, document, image, video, and
+music files under a directory \(em plus an \(lqother\(rq category for
+every file those six don't claim \(em and prints a per-category
+summary: total count, count and size per extension, total size, and
+duplicate statistics based on file content (SHA-256).
+.PP
+The directory to scan defaults to the current one; pass a different one
+as the
+.B last
+argument, after any flags.
+Relative
+.B \-move
+and
+.B \-ignore
+paths resolve against the scanned directory.
+.PP
+The bare
+.B quickap
+command prints a compact overview of every category: one row per
+category with file count, size, unique and duplicate counts, and
+reclaimable space, plus a reclaimable-space meter when duplicates
+exist.
+A category command
+.RB ( "quickap images" ,
+.BR "quickap docs" ,
+\&...) prints a detailed report for that category alone \(em a summary
+table, a reclaimable-space meter, and a per-extension breakdown with
+two-tone bars (unique vs.\& duplicate) \(em and enables the cleanup
+flags
+.B \-move
+and
+.BR \-delete .
+.PP
+Duplicates are
+.B byte-identical
+files, regardless of filename or extension: the same bytes saved as
+.I movie.mp4
+and
+.I movie-copy.mkv
+are caught, while similar-looking but re-encoded or resized files are
+not flagged.
+Within each group of identical files, the lexically first path counts
+as the original; the rest are duplicates.
+.SH COMMANDS
+.TP
+.I (none)
+Index all categories and print the compact overview.
+.TP
+.B apps
+Index applications only (aliases:
+.BR app ,
+.BR applications ).
+.TP
+.B archives
+Index archives only (alias:
+.BR archive ).
+.TP
+.B docs
+Index documents only (alias:
+.BR documents ).
+.TP
+.B images
+Index images only.
+.TP
+.B videos
+Index videos only (alias:
+.BR video ).
+.TP
+.B music
+Index music only.
+.TP
+.B other
+Index files no other category claims (alias:
+.BR others ).
+.TP
+.BR help " [" \fIcommand\fR ]
+Show the built-in help, or help for one command.
+.TP
+.B version
+Print the version and exit.
+.SH OPTIONS
+Flags operate on the current command's category (or all categories for
+the bare command).
+Flags must come
+.B before
+the trailing directory argument.
+.TP
+.BR \-list\-duplicates ", " \-ld
+List each duplicate group with file paths.
+The kept original is marked with a check mark, duplicate copies with a
+cross.
+.TP
+.BR \-list\-unique ", " \-lu
+List every unique file with its size \(em exactly what the report's
+\(lqunique\(rq column counts: every file that is not a duplicate copy,
+so a group's kept original is included.
+.TP
+.BR \-list\-large ", " \-ll
+List the 50 largest files with their sizes, largest first.
+.TP
+.BI \-ignore " DIR"
+Skip a directory while scanning.
+A bare name
+.RI ( node_modules )
+skips every directory with that name anywhere in the tree; a path
+containing a separator
+.RI ( files/cache )
+skips only that path relative to the scanned directory.
+Repeat the flag or comma-separate values for multiple directories:
+.BR "\-ignore tunes,media \-ignore dist" .
+.TP
+.B \-hidden
+Include hidden directories
+.RI ( .foo/ )
+in the scan.
+They are skipped by default.
+.TP
+.B \-no\-cache
+Disable the hash cache for this run \(em no reads from or writes to
+it.
+.TP
+.B \-verify
+Re-hash every duplicate candidate, ignoring cached hashes.
+The cache is still updated with the fresh results.
+Use this if you suspect a file changed without its size or
+modification time changing.
+.TP
+.B \-clear\-cache
+Delete the hash cache entirely and exit.
+The next scan re-hashes from scratch.
+.TP
+.B \-spacious
+Add vertical space between table rows for easier reading.
+The default is compact.
+.TP
+.BR \-verbose ", " \-vv
+Show scan details below the report: timing, hash-cache statistics
+(e.g.\& \(lq12 hashed, 240 from cache\(rq), and hints.
+Off by default.
+Unreadable entries are always reported, even without this flag.
+.TP
+.B \-version
+Print the version and exit.
+.TP
+.B \-help
+Show help for the current command.
+.PP
+The cleanup flags act on one category at a time, so they require a
+category command
+.RB "(e.g.\& " "quickap images \-delete" ");"
+the bare command indexes and reports only.
+.TP
+.BI \-move " DIR"
+Move each duplicate group \(em
+.B original and copies
+\(em into
+.IB DIR /\fIcategory\fP/group-NNN/
+for manual side-by-side sorting.
+.I DIR
+is created if needed and resolved relative to the scanned directory.
+Original filenames are kept; name collisions within a group get a
+numeric suffix
+.RI ( a.jpg ,
+.IR a-2.jpg ),
+detected case-insensitively so nothing is overwritten on
+case-insensitive filesystems (macOS APFS, Windows).
+Moves fall back to copy-plus-delete across filesystems.
+Cannot be combined with
+.BR \-delete .
+.TP
+.B \-delete
+.B Permanently delete
+duplicate files, keeping each group's original (the lexically first
+path).
+There is no undo.
+Run
+.B \-list\-duplicates
+first to review exactly which file each group keeps, or use
+.B \-move
+to sort manually instead.
+Cannot be combined with
+.BR \-move .
+.SH CATEGORIES
+Extensions are matched case-insensitively.
+.TP
+.B apps
+\&.apk .appimage .deb .dmg .exe .msi .pkg .rpm
+.TP
+.B archives
+\&.7z .7zip .bz2 .gz .iso .rar .tar .tbz .tgz .xz .zip .zst
+.TP
+.B documents
+\&.csv .doc .docx .epub .md .odp .ods .odt .pdf .ppt .pptx .rtf .txt
+\&.xls .xlsx
+.TP
+.B images
+\&.avif .bmp .gif .heic .heif .ico .jpeg .jpg .png .svg .tif .tiff
+\&.webp
+.TP
+.B videos
+\&.3gp .avi .flv .m4v .mkv .mov .mp4 .mpeg .mpg .ogv .webm .wmv
+.TP
+.B music
+\&.aac .aif .aiff .flac .m4a .mid .midi .mp3 .ogg .opus .wav .wma
+.TP
+.B other files
+Everything the categories above don't claim, including files with no
+extension (shown as
+.B (none)
+in the per-extension report).
+The seven categories together always account for every file in the
+scan, hidden and ignored directories aside.
+.SH DUPLICATE DETECTION
+Files are grouped by byte size first; only same-size candidates are
+hashed (SHA-256, in parallel across CPU cores), so unique-sized files
+are never read and scans stay fast on large trees.
+Duplicates are detected within each category independently.
+.PP
+The \(lqduplicates\(rq count is the number of redundant copies: a
+group of three identical files counts as one original plus two
+duplicates.
+Files that cannot be read count as unique.
+.SS The hash cache
+Computed hashes are cached between runs.
+A cached hash is reused when the file's size and modification time are
+unchanged, so repeat scans only read new or modified files.
+All scans share a single cache keyed by absolute file path, so hashing
+a parent directory also warms the cache for later scans of its
+subdirectories.
+Nothing is ever written into the scanned directories themselves.
+.PP
+Housekeeping is automatic: entries for files deleted under the scanned
+directory are pruned on each run (entries from other trees are left
+alone), and a missing or corrupt cache file just means the next run
+re-hashes everything.
+Deleting the cache directory is always safe and is equivalent to a
+one-time
+.B \-no\-cache
+run.
+.SH FILES
+.TP
+.I ~/.cache/quickap/hashes.json
+The hash cache on Linux and the BSDs (or
+.IR $XDG_CACHE_HOME/quickap/hashes.json
+if set).
+On macOS:
+.IR ~/Library/Caches/quickap/ ;
+on Windows:
+.IR %LocalAppData%\equickap\e .
+A JSON map of path to size, mtime, and SHA-256 for every file that has
+been content-hashed.
+.SH ENVIRONMENT
+.TP
+.B NO_COLOR
+When set (to any non-empty value), disables all color and styling.
+Color is also disabled automatically when standard output is not a
+terminal (e.g.\& when piped).
+.TP
+.B XDG_CACHE_HOME
+Overrides the base directory for the hash cache on Linux and the BSDs.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Error: unknown command, nonexistent or invalid scan directory, more
+than one directory argument,
+.B \-delete
+combined with
+.BR \-move ,
+or a failure while moving duplicate groups.
+.PP
+Unreadable files and directories inside the scan are skipped and
+counted in the report footer, never fatal.
+.SH EXAMPLES
+Overview of the current directory, then drill into one category:
+.PP
+.nf
+.RS
+quickap
+quickap images
+quickap images \-verbose ~/Pictures
+.RE
+.fi
+.PP
+Clean up a photo library carefully \(em review, then move groups out
+for side-by-side sorting:
+.PP
+.nf
+.RS
+quickap images \-list\-duplicates
+quickap images \-move ../photo\-dupes
+.RE
+.fi
+.PP
+Clean up decisively \(em one last look, then delete duplicates keeping
+each group's original:
+.PP
+.nf
+.RS
+quickap videos \-ld
+quickap videos \-delete
+.RE
+.fi
+.PP
+Scope the scan \(em skip build output by name, a specific folder by
+path, or include hidden directories:
+.PP
+.nf
+.RS
+quickap \-ignore node_modules,dist
+quickap docs \-ignore files/archive
+quickap images \-hidden \-ignore .git
+.RE
+.fi
+.PP
+Find what is eating disk space in a Downloads folder:
+.PP
+.nf
+.RS
+quickap \-list\-large ~/Downloads
+quickap archives \-list\-duplicates ~/Downloads
+.RE
+.fi
+.PP
+Force a fresh look at the data, bypassing or refreshing the cache:
+.PP
+.nf
+.RS
+quickap \-verify
+quickap \-no\-cache \-vv
+.RE
+.fi
+.SH NOTES
+The summary report always reflects the state
+.B before
+.BR \-move / \-delete
+ran.
+.PP
+A
+.B \-move
+target inside the scanned directory will be re-indexed on the next
+run; use a target outside it (e.g.\&
+.IR ../dupes )
+to avoid that.
+.PP
+Symbolic links and other non-regular files (sockets, FIFOs, devices)
+are ignored \(em never followed, indexed, or hashed \(em so a link and
+its target are never flagged as duplicates of each other.
+A symlinked scan directory itself is resolved to its target before
+scanning.
+.SH BUGS
+Report bugs at
+.UR https://github.com/jordancannon88/quickap/issues
+.UE .
+.SH LICENSE
+AGPL-3.0 \(em GNU Affero General Public License v3.0.
+.SH SEE ALSO
+.BR du (1),
+.BR find (1),
+.BR sha256sum (1)
+.PP
+Project home:
+.UR https://github.com/jordancannon88/quickap
+.UE

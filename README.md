@@ -92,6 +92,7 @@ built automatically by the release workflow:
 | `quickap-darwin-arm64`        | macOS, Apple Silicon (M-series) |
 | `quickap-darwin-amd64`        | macOS, Intel                    |
 | `quickap-windows-amd64.exe`   | Windows, x86-64                 |
+| `quickap.1`                   | Manual page (all platforms)     |
 
 Each release also includes a `checksums.txt` with the SHA-256 of every
 binary, signed keylessly with [cosign](https://docs.sigstore.dev/)
@@ -151,6 +152,41 @@ Cross-compile by setting the target platform, e.g.:
 ```sh
 GOOS=darwin GOARCH=arm64 go build -o quickap-darwin-arm64 .
 GOOS=windows GOARCH=amd64 go build -o quickap-windows-amd64.exe .
+```
+
+### Man page
+
+A full manual page ([`quickap.1`](quickap.1)) documents every command,
+flag, category, the duplicate-detection rules, the hash cache, exit
+statuses, and worked examples. It's in the repository and attached to
+each release alongside the binaries.
+
+If you downloaded a release binary, grab the man page the same way:
+
+```sh
+curl -sLO https://github.com/jordancannon88/quickap/releases/latest/download/quickap.1
+```
+
+(If you cloned the repository, `quickap.1` is already at its root.)
+
+Install it so `man quickap` works anywhere:
+
+```sh
+# per-user (no root; most distros include ~/.local/share/man in the man path)
+install -Dm644 quickap.1 ~/.local/share/man/man1/quickap.1
+
+# or system-wide
+sudo install -Dm644 quickap.1 /usr/local/share/man/man1/quickap.1
+```
+
+If `man quickap` doesn't find the per-user copy, add the directory to
+your man path: `export MANPATH="$HOME/.local/share/man:$MANPATH"`.
+
+To preview the page without installing it, point `man` at the file
+directly:
+
+```sh
+man ./quickap.1
 ```
 
 ### CI & releases
