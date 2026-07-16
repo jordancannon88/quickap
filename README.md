@@ -40,6 +40,10 @@ everything else</sub>
     <td>List duplicates, move them out for manual sorting, or delete them. Each group's original is always kept.</td>
   </tr>
   <tr>
+    <td>🗂️ <b>Organize</b></td>
+    <td>Copy — or move — everything minus the duplicates into a clean tree with one folder per category, every file verified by hash.</td>
+  </tr>
+  <tr>
     <td>📦 <b>Single binary</b></td>
     <td>No runtime, no config, no dependencies. Linux, BSD, macOS, Windows.</td>
   </tr>
@@ -152,9 +156,13 @@ Or preview it without installing: `man ./quickap.1`.
 quickap [command] [flags] [directory]
 ```
 
-The directory to scan defaults to the current one; pass a different one
-as the **last** argument, after any flags. Relative `-move` and
-`-ignore` paths resolve against the scanned directory.
+The directory to scan defaults to your home directory (`/home/you` on
+Linux, `/Users/you` on macOS, `C:\Users\you` on Windows); pass a
+different one as the **last** argument, after any flags. The report
+header always shows the running user's home directory alongside the
+scanned directory. Relative `-move`, `-organize`, `-organize-move`,
+`-organize-log`, and `-ignore` paths resolve against the scanned
+directory.
 
 ### Commands
 
@@ -180,13 +188,21 @@ Every command accepts these:
 | `-list-duplicates`, `-ld` | List each duplicate group; the kept original is marked `✓`, copies `✗`. |
 | `-list-unique`, `-lu`     | List every file that is not a duplicate copy, with sizes. |
 | `-list-large`, `-ll`      | List the 50 largest files, largest first. |
+| `-organize DIR`           | Copy every indexed file that is not a duplicate copy into `DIR/<Category>/` (`Applications`, `Documents`, `Music`, …), verifying each copy against its source by SHA-256. Sources are left in place; files already present in `DIR` with identical content are not copied again. Cannot be combined with `-move` or `-delete`. |
+| `-organize-move DIR`      | Like `-organize`, but **move** the files: each one is hash-verified at the destination before its source is deleted, so no content is ever lost to a bad copy. Skipped duplicate copies are left in place. |
+| `-organize-log FILE`      | Append a full audit trail of the organize run to `FILE`: every copied/moved file with its destination, every skipped duplicate with the original it matches, every "already present" hit, and every failure with its reason. Requires `-organize` or `-organize-move`. |
+
+In both organize modes, any files that could not be copied or moved are
+listed — with the reason per file — in `DIR/quickap-organize-failures.txt`.
+The list is only created when something failed, and a later run without
+failures removes it again.
 | `-ignore DIR`             | Skip a directory: a bare name (`node_modules`) matches anywhere, a path (`files/cache`) only that location. Repeat or comma-separate for multiple. |
 | `-hidden`                 | Include hidden directories (`.foo/`); skipped by default. |
 | `-no-cache`               | Disable the hash cache for this run. |
 | `-verify`                 | Re-hash every duplicate candidate, ignoring cached hashes. |
 | `-clear-cache`            | Delete the hash cache and exit. |
 | `-spacious`               | Add vertical space between table rows; default is compact. |
-| `-verbose`, `-vv`         | Show scan timing, hash-cache stats, and hints. |
+| `-verbose`, `-vv`         | Show scan timing, hash-cache stats and location, and hints. |
 | `-version`                | Print the version and exit. |
 | `-help`                   | Show help for the current command. |
 
@@ -228,6 +244,19 @@ quickap videos -ld         # one last look (-ld = -list-duplicates)
 quickap videos -delete     # remove duplicates, keep each group's original
 ```
 
+**Consolidate a messy tree.** Copy everything — minus the duplicates —
+into a clean structure with one folder per category, every file
+verified by hash. Re-running skips whatever is already there. Use
+`-organize` to copy (originals stay put) or `-organize-move` to move
+(each source is deleted only after its copy is verified):
+
+```sh
+quickap -organize ~/sorted ~/Downloads        # copy: ~/sorted/Documents/, ~/sorted/Images/, ...
+quickap -organize-move ~/sorted ~/Downloads   # move: same layout, sources removed once verified
+quickap images -organize ~/sorted             # just the images from your home dir
+quickap -organize ~/sorted -organize-log ~/sorted.log   # ... plus a full audit trail
+```
+
 **Scope the scan.** Skip directories by name or path, or opt into
 hidden ones:
 
@@ -262,7 +291,8 @@ Flags stack freely on any command:
   exactly which file each group keeps — review it before `-delete`.
 - **Hashes are cached between runs** and reused while a file's size and
   mtime are unchanged, so repeat scans only read new or modified files.
-  Run with `-vv` to see the split (`12 hashed, 240 from cache`).
+  Run with `-vv` to see the split (`12 hashed, 240 from cache`) and
+  where the cache file lives.
 
 ### The hash cache
 
@@ -300,11 +330,33 @@ file in the scan (hidden and `-ignore`d directories aside).
 
 - The summary report always reflects the state **before**
   `-move`/`-delete` ran.
-- `-move` keeps original filenames, suffixing collisions within a group
-  (`a.jpg`, `a-2.jpg`) — detected case-insensitively so nothing is
-  overwritten on macOS/Windows filesystems. A `-move` target inside the
-  scanned directory will be re-indexed on the next run; use one outside
-  it (e.g. `../dupes`).
+- `-move`, `-organize`, and `-organize-move` keep original filenames,
+  suffixing collisions (`a.jpg`, `a-2.jpg`) — detected
+  case-insensitively so nothing is overwritten on macOS/Windows
+  filesystems. A target inside the scanned directory will be re-indexed
+  on the next run; use one outside it (e.g. `../dupes`, `../sorted`).
+- `-organize` copies — it never touches the sources. Every copy is
+  verified by re-reading the destination and comparing SHA-256 hashes;
+  a failed or mismatched copy is removed and reported. Duplicate copies
+  are skipped, so each unique content lands in the new tree exactly
+  once.
+- `-organize-move` deletes each source only **after** its file is
+  hash-verified at the destination — a failed or mismatched copy leaves
+  the source untouched. A source whose exact content is already in the
+  destination is deleted without copying again. The skipped duplicate
+  copies stay in the source tree; remove them with `-delete` on a
+  category if desired.
+- Files the organize modes could not handle (unreadable sources, failed
+  verification, a source that could not be deleted after its verified
+  copy) are recorded in `quickap-organize-failures.txt` inside the
+  target directory, one tab-separated `path` + `reason` line per file —
+  handy for retrying or auditing. A run without failures deletes the
+  stale list.
+- `-organize-log` **appends** each run to the log file — a commented
+  header (time, mode, scanned directory, target), one tab-separated
+  `action` + `source` + `destination or detail` line per action, and a
+  commented summary — so the file accumulates the full history of your
+  organize runs.
 - Symbolic links and other non-regular files are ignored — never
   followed, indexed, or hashed. A symlinked scan directory is resolved
   to its target first.

@@ -19,12 +19,18 @@ every file those six don't claim \(em and prints a per-category
 summary: total count, count and size per extension, total size, and
 duplicate statistics based on file content (SHA-256).
 .PP
-The directory to scan defaults to the current one; pass a different one
-as the
+The directory to scan defaults to the running user's home directory
+(\fI/home/you\fP on Linux, \fI/Users/you\fP on macOS,
+\fIC:\\Users\\you\fP on Windows); pass a different one as the
 .B last
 argument, after any flags.
+The report header always shows the running user's home directory
+alongside the scanned directory.
 Relative
-.B \-move
+.BR \-move ,
+.BR \-organize ,
+.BR \-organize\-move ,
+.BR \-organize\-log ,
 and
 .B \-ignore
 paths resolve against the scanned directory.
@@ -113,6 +119,89 @@ so a group's kept original is included.
 .BR \-list\-large ", " \-ll
 List the 50 largest files with their sizes, largest first.
 .TP
+.BI \-organize " DIR"
+Copy every indexed file that is not a duplicate copy into
+.IB DIR /\fICategory\fP/
+(\fIApplications\fP, \fIDocuments\fP, \fIMusic\fP, ...), creating the
+tree as needed.
+Sources are left in place \(em this flag copies, it never moves or
+deletes.
+Every copy is verified: the destination is re-read from disk and its
+SHA-256 hash must match the source's; a failed or mismatched copy is
+removed and reported.
+Duplicate copies are skipped, so each unique content lands in the new
+tree exactly once, and a file already present in
+.I DIR
+with identical content is not copied again \(em re-running into the
+same directory is safe.
+Original filenames are kept; a name collision with a different file
+gets a numeric suffix
+.RI ( a.jpg ,
+.IR a-2.jpg ),
+detected case-insensitively.
+Files that could not be copied are listed, with reasons, in
+.IB DIR /quickap-organize-failures.txt
+(see
+.BR FILES );
+a later run without failures removes the list again.
+On a category command, only that category is organized.
+.I DIR
+is created if needed and resolved relative to the scanned directory.
+Cannot be combined with
+.BR \-organize\-move ,
+.BR \-move ,
+or
+.BR \-delete .
+.TP
+.BI \-organize\-move " DIR"
+Like
+.BR \-organize ,
+but
+.B move
+the files: each one is copied, hash-verified at the destination, and
+only then is its source deleted \(em a failed or mismatched copy
+leaves the source untouched, so no content is ever lost to a bad copy.
+A source whose exact content is already present in
+.I DIR
+is deleted without copying again.
+Skipped duplicate copies are left in place in the source tree.
+Files that could not be moved \(em including sources that could not be
+deleted after a verified copy \(em are listed in
+.IB DIR /quickap-organize-failures.txt
+exactly as for
+.BR \-organize .
+Cannot be combined with
+.BR \-organize ,
+.BR \-move ,
+or
+.BR \-delete .
+.TP
+.BI \-organize\-log " FILE"
+Append a full audit trail of the
+.BR \-organize / \-organize\-move
+run to
+.IR FILE :
+a commented header (time, mode, scanned directory, target directory),
+one tab-separated line per action \(em
+.BR copied / moved
+with the destination path,
+.B skipped\-duplicate
+with the kept original it matches,
+.B already\-present
+(and, in move mode,
+.BR already\-present\-source\-deleted ),
+.B failed
+and
+.B source\-not\-deleted
+with the reason \(em and a commented summary.
+Runs are appended, so
+.I FILE
+accumulates the history of every organize run pointed at it.
+Requires
+.B \-organize
+or
+.BR \-organize\-move .
+.TP
 .BI \-ignore " DIR"
 Skip a directory while scanning.
 A bare name
@@ -150,7 +239,8 @@ The default is compact.
 .TP
 .BR \-verbose ", " \-vv
 Show scan details below the report: timing, hash-cache statistics
-(e.g.\& \(lq12 hashed, 240 from cache\(rq), and hints.
+(e.g.\& \(lq12 hashed, 240 from cache\(rq), the location of the hash
+cache file, and hints.
 Off by default.
 Unreadable entries are always reported, even without this flag.
 .TP
@@ -264,6 +354,15 @@ on Windows:
 .IR %LocalAppData%\equickap\e .
 A JSON map of path to size, mtime, and SHA-256 for every file that has
 been content-hashed.
+.TP
+.I DIR/quickap-organize-failures.txt
+Written into the
+.BR \-organize / \-organize\-move
+target directory when files could not be copied or moved: a commented
+header, then one line per file with the absolute source path and the
+reason, separated by a tab.
+Created only when something failed; a later organize run into the same
+directory without failures removes it.
 .SH ENVIRONMENT
 .TP
 .B NO_COLOR
@@ -284,18 +383,49 @@ than one directory argument,
 .B \-delete
 combined with
 .BR \-move ,
-or a failure while moving duplicate groups.
+.B \-organize
+or
+.B \-organize\-move
+combined with each other or with
+.B \-move
+or
+.BR \-delete ,
+.B \-organize\-log
+without
+.B \-organize
+or
+.BR \-organize\-move ,
+a failure while moving duplicate groups, or a failure to create a
+directory while organizing.
 .PP
 Unreadable files and directories inside the scan are skipped and
 counted in the report footer, never fatal.
 .SH EXAMPLES
-Overview of the current directory, then drill into one category:
+Overview of your home directory, then drill into one category:
 .PP
 .nf
 .RS
 quickap
 quickap images
 quickap images \-verbose ~/Pictures
+.RE
+.fi
+.PP
+Consolidate a messy tree \(em copy (or move) everything except
+duplicate copies into a clean, categorized structure, each file
+hash-verified.
+With
+.B \-organize
+the sources are untouched; with
+.B \-organize\-move
+each source is deleted once its copy is verified:
+.PP
+.nf
+.RS
+quickap \-organize ~/sorted ~/Downloads
+quickap \-organize\-move ~/sorted ~/Downloads
+quickap images \-organize ~/sorted
+quickap \-organize ~/sorted \-organize\-log ~/sorted.log
 .RE
 .fi
 .PP
@@ -354,10 +484,14 @@ The summary report always reflects the state
 ran.
 .PP
 A
-.B \-move
+.BR \-move ,
+.BR \-organize ,
+or
+.B \-organize\-move
 target inside the scanned directory will be re-indexed on the next
 run; use a target outside it (e.g.\&
-.IR ../dupes )
+.IR ../dupes ,
+.IR ../sorted )
 to avoid that.
 .PP
 Symbolic links and other non-regular files (sockets, FIFOs, devices)

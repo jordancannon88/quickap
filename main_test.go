@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -387,5 +388,352 @@ func TestFindDuplicatesUsesCache(t *testing.T) {
 	_, _, s3 := findDuplicates([]*fileEntry{a3, b3}, c, true)
 	if s3.hashed != 2 || s3.cached != 0 {
 		t.Errorf("verify run stats = %+v, want 2 hashed", s3)
+	}
+}
+
+func TestCopyFileVerified(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.txt")
+	if err := os.WriteFile(src, []byte("hello world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "dst.txt")
+	if err := copyFileVerified(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello world" {
+		t.Errorf("dst content = %q, want %q", data, "hello world")
+	}
+
+	// A missing source fails and must not leave a destination behind.
+	bad := filepath.Join(dir, "copy-of-missing.txt")
+	if err := copyFileVerified(filepath.Join(dir, "missing.txt"), bad); err == nil {
+		t.Error("copying a missing source should fail")
+	}
+	if _, err := os.Lstat(bad); !os.IsNotExist(err) {
+		t.Error("failed copy left a destination file behind")
+	}
+}
+
+// organizeResults scans root and runs duplicate detection, mirroring how
+// main assembles the catResults that organizeFiles consumes.
+func organizeResults(t *testing.T, root string) []catResult {
+	t.Helper()
+	byCategory, skipped := scan(root, categories, false, nil)
+	if skipped != 0 {
+		t.Fatalf("skipped = %d, want 0", skipped)
+	}
+	var results []catResult
+	for _, cat := range categories {
+		entries := byCategory[cat.key]
+		groups, unreadable, _ := findDuplicates(entries, nil, false)
+		if unreadable != 0 {
+			t.Fatalf("unreadable = %d, want 0", unreadable)
+		}
+		results = append(results, catResult{cat: cat, entries: entries, groups: groups})
+	}
+	return results
+}
+
+// treeFiles returns every regular file under dir, as slash-separated paths
+// relative to dir, mapped to its content.
+func treeFiles(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	got := map[string]string{}
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		got[filepath.ToSlash(rel)] = string(data)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestOrganizeFiles(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, content string) {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a-photo.jpg", "jpeg-bytes")
+	write("z-copy.jpg", "jpeg-bytes") // duplicate of a-photo.jpg — must not be copied
+	write("song.mp3", "mp3-bytes")
+	write("notes.txt", "first notes")
+	write("sub/notes.txt", "different notes") // same name, different content — needs a suffix
+	write("data.json", "{}")                  // lands in Other
+
+	dest := t.TempDir()
+	if err := organizeFiles(root, dest, organizeResults(t, root), false, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{
+		"Images/a-photo.jpg":    "jpeg-bytes",
+		"Music/song.mp3":        "mp3-bytes",
+		"Documents/notes.txt":   "first notes",
+		"Documents/notes-2.txt": "different notes",
+		"Other/data.json":       "{}",
+	}
+	if got := treeFiles(t, dest); !mapsEqual(got, want) {
+		t.Errorf("organized tree = %v, want %v", got, want)
+	}
+
+	// Sources must be untouched — organize copies, never moves.
+	if _, err := os.Stat(filepath.Join(root, "a-photo.jpg")); err != nil {
+		t.Error("source file should still exist after -organize")
+	}
+
+	// Re-running against the same destination must copy nothing twice:
+	// every file is recognized as already present, no -2/-3 suffixes pile up.
+	if err := organizeFiles(root, dest, organizeResults(t, root), false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := treeFiles(t, dest); !mapsEqual(got, want) {
+		t.Errorf("tree after re-run = %v, want unchanged %v", got, want)
+	}
+}
+
+func TestOrganizeFilesMove(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, content string) {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a-photo.jpg", "jpeg-bytes")
+	write("z-copy.jpg", "jpeg-bytes") // duplicate — skipped, must stay in place
+	write("song.mp3", "mp3-bytes")
+	write("notes.txt", "first notes")
+	write("sub/notes.txt", "different notes")
+
+	dest := t.TempDir()
+	if err := organizeFiles(root, dest, organizeResults(t, root), true, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{
+		"Images/a-photo.jpg":    "jpeg-bytes",
+		"Music/song.mp3":        "mp3-bytes",
+		"Documents/notes.txt":   "first notes",
+		"Documents/notes-2.txt": "different notes",
+	}
+	if got := treeFiles(t, dest); !mapsEqual(got, want) {
+		t.Errorf("organized tree = %v, want %v", got, want)
+	}
+
+	// Moved sources are gone; the skipped duplicate copy is left in place.
+	if got := treeFiles(t, root); !mapsEqual(got, map[string]string{"z-copy.jpg": "jpeg-bytes"}) {
+		t.Errorf("source tree after move = %v, want only the skipped duplicate z-copy.jpg", got)
+	}
+}
+
+func TestOrganizeFailureList(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"ok.txt", "gone.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	results := organizeResults(t, root)
+	// Deleting a scanned file before organizing forces a copy failure
+	// regardless of privileges or filesystem.
+	gonePath := filepath.Join(root, "gone.txt")
+	if err := os.Remove(gonePath); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	if err := organizeFiles(root, dest, results, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "Documents", "ok.txt")); err != nil {
+		t.Error("the readable file should still be organized:", err)
+	}
+	listPath := filepath.Join(dest, organizeFailuresName)
+	data, err := os.ReadFile(listPath)
+	if err != nil {
+		t.Fatal("failure list should exist after a failed copy:", err)
+	}
+	list := string(data)
+	if !strings.Contains(list, gonePath+"\t") {
+		t.Errorf("failure list should name %s with a tab-separated reason; got:\n%s", gonePath, list)
+	}
+	if strings.Contains(list, filepath.Join(root, "ok.txt")) {
+		t.Errorf("failure list should not mention files that were organized; got:\n%s", list)
+	}
+
+	// A clean re-run (the broken file no longer exists to scan) must
+	// remove the now-stale failure list.
+	if err := organizeFiles(root, dest, organizeResults(t, root), false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(listPath); !os.IsNotExist(err) {
+		t.Error("stale failure list should be removed by a run without failures")
+	}
+}
+
+func TestOrganizeActionLog(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a.jpg", "jpeg-bytes")
+	write("b.jpg", "jpeg-bytes") // duplicate of a.jpg
+	write("notes.txt", "notes")
+
+	dest := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "actions.log")
+	if err := organizeFiles(root, dest, organizeResults(t, root), false, logPath); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal("action log should exist:", err)
+	}
+	log := string(data)
+	for _, line := range []string{
+		"copied\t" + filepath.Join(root, "a.jpg") + "\t" + filepath.Join(dest, "Images", "a.jpg"),
+		"copied\t" + filepath.Join(root, "notes.txt") + "\t" + filepath.Join(dest, "Documents", "notes.txt"),
+		"skipped-duplicate\t" + filepath.Join(root, "b.jpg") + "\tduplicate of " + filepath.Join(root, "a.jpg"),
+		"# summary: 2 copied, 0 already present, 1 duplicate copies skipped, 0 failed, 0 sources not deleted",
+	} {
+		if !strings.Contains(log, line+"\n") {
+			t.Errorf("action log missing line %q; got:\n%s", line, log)
+		}
+	}
+
+	// A second run appends — the log keeps both runs' history, and the
+	// re-run records its files as already present.
+	if err := organizeFiles(root, dest, organizeResults(t, root), false, logPath); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log = string(data)
+	if got := strings.Count(log, "# quickap organize log"); got != 2 {
+		t.Errorf("log has %d run headers, want 2 (append, not overwrite)", got)
+	}
+	if !strings.Contains(log, "already-present\t"+filepath.Join(root, "a.jpg")+"\t") {
+		t.Errorf("re-run should log already-present actions; got:\n%s", log)
+	}
+}
+
+// In move mode, a source whose exact content already sits in the
+// destination is deleted without another copy being made — the move's
+// outcome is already on disk, verified by hash.
+func TestOrganizeMoveAlreadyPresent(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("same content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dest, "Documents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "Documents", "notes.txt"), []byte("same content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := organizeFiles(root, dest, organizeResults(t, root), true, ""); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"Documents/notes.txt": "same content"}
+	if got := treeFiles(t, dest); !mapsEqual(got, want) {
+		t.Errorf("destination = %v, want unchanged %v (no notes-2.txt)", got, want)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "notes.txt")); !os.IsNotExist(err) {
+		t.Error("source should be deleted once its content is verified in the destination")
+	}
+}
+
+func mapsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func TestDestName(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "on-disk.txt"), []byte("disk content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	write := func(name, content string) *fileEntry {
+		path := filepath.Join(src, name)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return &fileEntry{path: path, ext: filepath.Ext(name)}
+	}
+
+	taken := map[string]bool{}
+	if name, already, err := destName(dir, write("fresh.txt", "x"), taken); err != nil || already || name != "fresh.txt" {
+		t.Errorf("fresh name = %q, %v, %v; want fresh.txt, false, nil", name, already, err)
+	}
+	// Same lowercased name this run — suffixed even though disk is free
+	// (case-insensitive filesystems would otherwise overwrite).
+	if name, already, err := destName(dir, write("FRESH.txt", "y"), taken); err != nil || already || name != "FRESH-2.txt" {
+		t.Errorf("case-colliding name = %q, %v, %v; want FRESH-2.txt, false, nil", name, already, err)
+	}
+	// Identical content already on disk — skip, keep the existing name.
+	if name, already, err := destName(dir, write("on-disk.txt", "disk content"), taken); err != nil || !already || name != "on-disk.txt" {
+		t.Errorf("identical on disk = %q, %v, %v; want on-disk.txt, true, nil", name, already, err)
+	}
+	// Different content behind the on-disk name — suffixed.
+	if name, already, err := destName(dir, write("on-disk.txt", "other content"), taken); err != nil || already || name != "on-disk-2.txt" {
+		t.Errorf("differing on disk = %q, %v, %v; want on-disk-2.txt, false, nil", name, already, err)
+	}
+}
+
+func TestTildePath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory:", err)
+	}
+	cases := []struct{ in, want string }{
+		{filepath.Join(home, ".cache", "quickap", "hashes.json"), "~/.cache/quickap/hashes.json"},
+		{home, "~"},
+		{home + "stuff/x", home + "stuff/x"}, // sibling dir sharing the prefix, not under home
+		{"/etc/hosts", "/etc/hosts"},
+	}
+	for _, c := range cases {
+		if got := tildePath(c.in); got != c.want {
+			t.Errorf("tildePath(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
