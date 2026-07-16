@@ -1,12 +1,15 @@
 // quickap indexes application, archive, document, image, video, and
-// music files under the current directory — plus an "other" category
-// for every file those don't claim — and prints a per-category
-// summary: total count, count and size per extension, total size, and
-// duplicate statistics based on file content (SHA-256).
+// music files under a directory (the running user's home directory by
+// default) — plus an "other" category for every file those don't claim
+// — and prints a per-category summary: total count, count and size per
+// extension, total size, and duplicate statistics based on file
+// content (SHA-256).
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -19,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -239,6 +243,83 @@ func tRow(widths []int, aligns string, cells ...string) string {
 	return b.String()
 }
 
+// Live -vv progress: the walk and hash workers bump these counters
+// atomically, and a ticker goroutine repaints one status line on stderr
+// until the run's report is ready.
+var (
+	progressPhase  atomic.Value // "scan" or "hash"
+	progressDirs   atomic.Int64 // directories read
+	progressFiles  atomic.Int64 // files indexed
+	progressHashed atomic.Int64 // duplicate candidates hashed
+	progressBytes  atomic.Int64 // bytes read for hashing
+	progressCached atomic.Int64 // candidate hashes reused from the cache
+)
+
+// startProgress begins repainting the live status line when verbose is
+// set and stderr is a terminal (piped runs stay clean). The returned
+// stop function erases the line again; call it before the report prints.
+func startProgress(verbose bool) (stop func()) {
+	fi, err := os.Stderr.Stat()
+	if !verbose || err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+		return func() {}
+	}
+	progressPhase.Store("scan")
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		spinner := []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+		start := time.Now()
+		ticker := time.NewTicker(120 * time.Millisecond)
+		defer ticker.Stop()
+		for i := 0; ; i++ {
+			select {
+			case <-done:
+				fmt.Fprint(os.Stderr, "\r\x1b[2K")
+				return
+			case <-ticker.C:
+			}
+			var status string
+			if progressPhase.Load() == "hash" {
+				status = fmt.Sprintf("hashing duplicate candidates · %s hashed (%s) · %s from cache",
+					comma(progressHashed.Load()), humanSize(progressBytes.Load()), comma(progressCached.Load()))
+			} else {
+				status = fmt.Sprintf("scanning · %s dirs · %s files indexed",
+					comma(progressDirs.Load()), comma(progressFiles.Load()))
+			}
+			fmt.Fprintf(os.Stderr, "\r\x1b[2K  %c %s · %s",
+				spinner[i%len(spinner)], status, time.Since(start).Round(time.Second/10))
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
+	}
+}
+
+// comma renders n with thousands separators for the progress line.
+func comma(n int64) string {
+	s := fmt.Sprintf("%d", n)
+	neg := ""
+	if s[0] == '-' {
+		neg, s = "-", s[1:]
+	}
+	if len(s) <= 3 {
+		return neg + s
+	}
+	var b strings.Builder
+	pre := len(s) % 3
+	if pre == 0 {
+		pre = 3
+	}
+	b.WriteString(s[:pre])
+	for i := pre; i < len(s); i += 3 {
+		b.WriteString(",")
+		b.WriteString(s[i : i+3])
+	}
+	return neg + b.String()
+}
+
 func humanSize(b int64) string {
 	const unit = 1024
 	if b < unit {
@@ -299,6 +380,9 @@ func main() {
 	var listUnique bool
 	fs.BoolVar(&listUnique, "list-unique", false, "list unique files (every file that is not a duplicate copy) with paths")
 	fs.BoolVar(&listUnique, "lu", false, "shorthand for -list-unique")
+	var listLarge bool
+	fs.BoolVar(&listLarge, "list-large", false, "list the 50 largest files, largest first")
+	fs.BoolVar(&listLarge, "ll", false, "shorthand for -list-large")
 	hidden := fs.Bool("hidden", false, "include hidden directories in the scan")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	var ignores multiFlag
@@ -307,9 +391,12 @@ func main() {
 	verify := fs.Bool("verify", false, "re-hash all duplicate candidates, ignoring cached hashes")
 	clearCache := fs.Bool("clear-cache", false, "delete the hash cache and exit")
 	var verbose bool
-	fs.BoolVar(&verbose, "verbose", false, "show scan details (timing, hash-cache stats, hints)")
+	fs.BoolVar(&verbose, "verbose", false, "show scan details (live progress, timing, cpu and memory usage, hash-cache stats and location, hints)")
 	fs.BoolVar(&verbose, "vv", false, "shorthand for -verbose")
 	fs.BoolVar(&spacious, "spacious", false, "add vertical space between table rows (default: compact)")
+	organizeDir := fs.String("organize", "", "copy every indexed file that is not a duplicate copy into `DIR`, one subdirectory per category, verifying each copy by hash")
+	organizeMoveDir := fs.String("organize-move", "", "like -organize, but move: each file is hash-verified at the destination before its source is deleted")
+	organizeLog := fs.String("organize-log", "", "append a log of every -organize/-organize-move action to `FILE`")
 	// -move and -delete act on one category, so they require a category
 	// command; the bare command indexes and reports only.
 	moveDir, deleteDups := new(string), new(bool)
@@ -336,6 +423,22 @@ func main() {
 		fmt.Fprintln(os.Stderr, "quickap: -delete and -move are mutually exclusive")
 		os.Exit(1)
 	}
+	if *organizeDir != "" && *organizeMoveDir != "" {
+		fmt.Fprintln(os.Stderr, "quickap: -organize and -organize-move are mutually exclusive")
+		os.Exit(1)
+	}
+	orgDir, orgMove := *organizeDir, false
+	if *organizeMoveDir != "" {
+		orgDir, orgMove = *organizeMoveDir, true
+	}
+	if orgDir != "" && (*deleteDups || *moveDir != "") {
+		fmt.Fprintln(os.Stderr, "quickap: -organize and -organize-move cannot be combined with -move or -delete")
+		os.Exit(1)
+	}
+	if *organizeLog != "" && orgDir == "" {
+		fmt.Fprintln(os.Stderr, "quickap: -organize-log requires -organize or -organize-move")
+		os.Exit(1)
+	}
 
 	// A trailing positional argument is the directory to scan.
 	switch rest := fs.Args(); {
@@ -349,7 +452,10 @@ func main() {
 	var root string
 	var err error
 	if rootArg == "" {
-		root, err = os.Getwd()
+		// No directory given: scan the running user's home directory
+		// (/home/... on Linux, /Users/... on macOS, C:\Users\... on
+		// Windows).
+		root, err = os.UserHomeDir()
 	} else {
 		root, err = filepath.Abs(rootArg)
 		if err == nil {
@@ -371,12 +477,14 @@ func main() {
 	}
 
 	start := time.Now()
+	stopProgress := startProgress(verbose)
 	byCategory, skipped := scan(root, active, *hidden, ignores)
 
 	var cache *hashCache
 	if !*noCache {
 		cache = loadCache(root)
 	}
+	progressPhase.Store("hash")
 	var hs hashStats
 	var results []catResult
 	for _, cat := range active {
@@ -414,25 +522,40 @@ func main() {
 	}
 	cache.save()
 	elapsed := time.Since(start)
+	stopProgress()
 
 	fmt.Println()
 	fmt.Printf("  %s %s\n", bold(magenta("◆ quickap")), dim("· file index"))
-	fmt.Printf("  %s\n", dim(root))
+	if home, homeErr := os.UserHomeDir(); homeErr == nil && home != "" {
+		fmt.Printf("  %s\n", dim("home: "+home))
+	}
+	fmt.Printf("  %s\n", dim("scan: "+root))
 	if len(results) == 1 {
 		renderSection(results[0].cat, results[0].stats, results[0].t)
 	} else {
 		renderOverview(results, verbose)
 	}
-	renderFooter(skipped, elapsed, hs, verbose)
+	renderFooter(skipped, elapsed, hs, cache, *noCache, verbose)
 
 	if listUnique {
 		for _, r := range results {
 			renderUnique(root, r.cat, r.entries)
 		}
 	}
+	if listLarge {
+		for _, r := range results {
+			renderLarge(root, r.cat, r.entries)
+		}
+	}
 	if listDups {
 		for _, r := range results {
 			renderGroups(root, r.cat, r.groups)
+		}
+	}
+	if orgDir != "" {
+		if err := organizeFiles(root, orgDir, results, orgMove, *organizeLog); err != nil {
+			fmt.Fprintln(os.Stderr, "quickap:", err)
+			os.Exit(1)
 		}
 	}
 	if *moveDir != "" {
@@ -490,49 +613,102 @@ func ignoredDir(root, path string, patterns []string) bool {
 // directories always; unreadable entries are counted, not fatal.
 // Non-regular files (symlinks, sockets, FIFOs, devices) are ignored:
 // never followed, indexed, or hashed.
+//
+// Directories are walked in parallel — the walk is syscall-bound
+// (one ReadDir per directory plus one lstat per matched file), so a
+// bounded pool of goroutines keeps the kernel busy where a serial walk
+// would wait on one call at a time. Each directory batches its results
+// and takes the shared lock once.
 func scan(root string, active []category, includeHidden bool, ignores []string) (map[string][]*fileEntry, int) {
+	type hit struct {
+		key string
+		e   *fileEntry
+	}
 	byCategory := map[string][]*fileEntry{}
 	var skipped int
-	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	var mu sync.Mutex
+	// The pool is sized for outstanding filesystem requests, not CPU
+	// work, so it gets a floor: even a single-core machine profits from
+	// overlapping disk waits on a cold directory cache.
+	workers := 4 * runtime.NumCPU()
+	if workers < 16 {
+		workers = 16
+	}
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	var walk func(dir string)
+	walk = func(dir string) {
+		defer wg.Done()
+		// Subdirectory goroutines spawned below block on sem until this
+		// directory releases its slot; a parent never waits on its
+		// children, so holding the slot while spawning cannot deadlock.
+		sem <- struct{}{}
+		defer func() { <-sem }()
+		dirents, err := os.ReadDir(dir)
 		if err != nil {
+			mu.Lock()
 			skipped++
-			return nil
+			mu.Unlock()
+			return
 		}
-		if d.IsDir() {
-			if path == root {
-				return nil
-			}
-			if !includeHidden && strings.HasPrefix(d.Name(), ".") {
-				return filepath.SkipDir
-			}
-			if ignoredDir(root, path, ignores) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.Type()&fs.ModeType != 0 {
-			// Symlinks would otherwise be indexed with the link's own
-			// lstat size while hashing follows to the target; skip all
-			// non-regular files instead.
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(d.Name()))
-		for _, cat := range active {
-			if !cat.matches(ext) {
+		progressDirs.Add(1)
+		var hits []hit
+		unreadable := 0
+		for _, d := range dirents {
+			name := d.Name()
+			if d.IsDir() {
+				path := filepath.Join(dir, name)
+				if !includeHidden && strings.HasPrefix(name, ".") {
+					continue
+				}
+				if ignoredDir(root, path, ignores) {
+					continue
+				}
+				wg.Add(1)
+				go walk(path)
 				continue
 			}
-			info, err := d.Info()
-			if err != nil {
-				skipped++
-				return nil
+			if d.Type()&fs.ModeType != 0 {
+				// Symlinks would otherwise be indexed with the link's own
+				// lstat size while hashing follows to the target; skip all
+				// non-regular files instead.
+				continue
 			}
-			byCategory[cat.key] = append(byCategory[cat.key], &fileEntry{
-				path: path, ext: ext, size: info.Size(), mtime: info.ModTime().UnixNano(),
-			})
-			return nil
+			ext := strings.ToLower(filepath.Ext(name))
+			for _, cat := range active {
+				if !cat.matches(ext) {
+					continue
+				}
+				info, err := d.Info()
+				if err != nil {
+					unreadable++
+					break
+				}
+				hits = append(hits, hit{cat.key, &fileEntry{
+					path: filepath.Join(dir, name), ext: ext, size: info.Size(), mtime: info.ModTime().UnixNano(),
+				}})
+				break
+			}
 		}
-		return nil
-	})
+		progressFiles.Add(int64(len(hits)))
+		if len(hits) == 0 && unreadable == 0 {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		for _, h := range hits {
+			byCategory[h.key] = append(byCategory[h.key], h.e)
+		}
+		skipped += unreadable
+	}
+	wg.Add(1)
+	walk(root)
+	wg.Wait()
+	// The parallel walk collects entries in nondeterministic order; sort
+	// by path so every downstream consumer sees a stable view.
+	for _, entries := range byCategory {
+		sort.Slice(entries, func(i, j int) bool { return entries[i].path < entries[j].path })
+	}
 	return byCategory, skipped
 }
 
@@ -567,6 +743,7 @@ func findDuplicates(entries []*fileEntry, cache *hashCache, verify bool) ([][]*f
 			if h, ok := cache.get(e.path, e.size, e.mtime); ok {
 				e.hash = h
 				stats.cached++
+				progressCached.Add(1)
 				continue
 			}
 		}
@@ -582,6 +759,8 @@ func findDuplicates(entries []*fileEntry, cache *hashCache, verify bool) ([][]*f
 				unreadable++
 				return
 			}
+			progressHashed.Add(1)
+			progressBytes.Add(e.size)
 			e.hash = h
 			cache.put(e.path, e.size, e.mtime, h)
 			stats.hashed++
@@ -626,17 +805,20 @@ func hashFile(path string) (string, error) {
 // hashCache persists computed SHA-256 hashes between runs so unchanged
 // files (same size and mtime) are never re-read. One cache file shared by
 // all scans, keyed by absolute file path — so hashing a parent directory
-// also warms the cache for later runs against its subdirectories. A nil
-// *hashCache is a valid no-op cache. get/put are safe for concurrent use
-// (lookups on the scan goroutine race with puts from hash workers).
+// also warms the cache for later runs against its subdirectories. The
+// file uses a compact length-prefixed binary format (hashes.bin): at
+// hundreds of thousands of entries, parsing the older JSON layout
+// dominated warm-cache runs. A nil *hashCache is a valid no-op cache.
+// get/put are safe for concurrent use (lookups on the scan goroutine
+// race with puts from hash workers).
 type hashCache struct {
 	mu      sync.Mutex
 	file    string
-	root    string // scan root; pruning is scoped to entries under it
-	legacy  string // pre-shared-layout per-root cache, merged then removed
+	root    string   // scan root; pruning is scoped to entries under it
+	legacy  []string // older JSON cache files, merged then removed on save
 	dirty   bool
 	touched map[string]bool
-	Entries map[string]cacheEntry `json:"entries"`
+	Entries map[string]cacheEntry
 }
 
 type cacheEntry struct {
@@ -645,35 +827,132 @@ type cacheEntry struct {
 	Hash  string `json:"sha256"`
 }
 
+// cacheMagic starts every binary cache file: format name plus a version
+// byte. A file without it (or from a different version) is ignored.
+var cacheMagic = []byte("QAPC\x01")
+
+// encodeCache serializes entries into the binary cache format: the magic,
+// an entry count, then per entry the path, size, mtime, and hash, with
+// varint lengths and values.
+func encodeCache(entries map[string]cacheEntry) []byte {
+	var b bytes.Buffer
+	b.Write(cacheMagic)
+	var tmp [binary.MaxVarintLen64]byte
+	putUvarint := func(v uint64) { b.Write(tmp[:binary.PutUvarint(tmp[:], v)]) }
+	putVarint := func(v int64) { b.Write(tmp[:binary.PutVarint(tmp[:], v)]) }
+	putString := func(s string) { putUvarint(uint64(len(s))); b.WriteString(s) }
+	putUvarint(uint64(len(entries)))
+	for path, e := range entries {
+		putString(path)
+		putVarint(e.Size)
+		putVarint(e.Mtime)
+		putString(e.Hash)
+	}
+	return b.Bytes()
+}
+
+// decodeCache parses data produced by encodeCache. ok is false for any
+// malformed or foreign input — the caller treats that as an empty cache.
+func decodeCache(data []byte) (entries map[string]cacheEntry, ok bool) {
+	if !bytes.HasPrefix(data, cacheMagic) {
+		return nil, false
+	}
+	data = data[len(cacheMagic):]
+	uvarint := func() (uint64, bool) {
+		v, n := binary.Uvarint(data)
+		if n <= 0 {
+			return 0, false
+		}
+		data = data[n:]
+		return v, true
+	}
+	varint := func() (int64, bool) {
+		v, n := binary.Varint(data)
+		if n <= 0 {
+			return 0, false
+		}
+		data = data[n:]
+		return v, true
+	}
+	str := func() (string, bool) {
+		l, ok := uvarint()
+		if !ok || l > uint64(len(data)) {
+			return "", false
+		}
+		s := string(data[:l])
+		data = data[l:]
+		return s, true
+	}
+	count, ok := uvarint()
+	if !ok {
+		return nil, false
+	}
+	// The count is a size hint from untrusted bytes; cap the initial
+	// allocation so a corrupt header can't balloon memory.
+	hint := count
+	if hint > 1<<20 {
+		hint = 1 << 20
+	}
+	entries = make(map[string]cacheEntry, hint)
+	for i := uint64(0); i < count; i++ {
+		path, ok1 := str()
+		size, ok2 := varint()
+		mtime, ok3 := varint()
+		hash, ok4 := str()
+		if !ok1 || !ok2 || !ok3 || !ok4 {
+			return nil, false
+		}
+		entries[path] = cacheEntry{Size: size, Mtime: mtime, Hash: hash}
+	}
+	return entries, true
+}
+
 // loadCache reads the shared cache, returning an empty cache on any error
-// (missing file, corrupt JSON) — the cache is an optimization only. A
-// legacy per-root cache file (older layout) is merged in and cleaned up
-// on save.
+// (missing file, corrupt data) — the cache is an optimization only.
+// Legacy JSON caches from older versions (the shared hashes.json, and the
+// per-root layout before that) are merged in and cleaned up on save.
 func loadCache(root string) *hashCache {
 	dir, err := os.UserCacheDir()
 	if err != nil {
 		return nil
 	}
+	dir = filepath.Join(dir, "quickap")
+	sum := sha256.Sum256([]byte(root))
+	return loadCacheFiles(root, filepath.Join(dir, "hashes.bin"), []string{
+		filepath.Join(dir, "hashes.json"),
+		filepath.Join(dir, hex.EncodeToString(sum[:8])+".json"),
+	})
+}
+
+// loadCacheFiles reads the binary cache at file, then merges every legacy
+// JSON cache that still exists. Reading a legacy file marks the cache
+// dirty so the next save persists the merge and removes the old file.
+func loadCacheFiles(root, file string, legacy []string) *hashCache {
 	c := &hashCache{
-		file:    filepath.Join(dir, "quickap", "hashes.json"),
+		file:    file,
 		root:    root,
+		legacy:  legacy,
 		touched: map[string]bool{},
 		Entries: map[string]cacheEntry{},
 	}
 	if data, err := os.ReadFile(c.file); err == nil {
-		if json.Unmarshal(data, c) != nil || c.Entries == nil {
-			c.Entries = map[string]cacheEntry{}
+		if entries, ok := decodeCache(data); ok {
+			c.Entries = entries
 		}
 	}
-	sum := sha256.Sum256([]byte(root))
-	c.legacy = filepath.Join(dir, "quickap", hex.EncodeToString(sum[:8])+".json")
-	if data, err := os.ReadFile(c.legacy); err == nil {
-		var old hashCache
+	for _, lf := range legacy {
+		data, err := os.ReadFile(lf)
+		if err != nil {
+			continue
+		}
+		c.dirty = true // rewrite in the new format and remove the old file
+		var old struct {
+			Entries map[string]cacheEntry `json:"entries"`
+		}
 		if json.Unmarshal(data, &old) == nil {
 			for path, e := range old.Entries {
 				if _, ok := c.Entries[path]; !ok {
 					c.Entries[path] = e
-					c.dirty = true
 				}
 			}
 		}
@@ -730,15 +1009,13 @@ func (c *hashCache) save() {
 	if !c.dirty {
 		return
 	}
-	data, err := json.Marshal(c)
-	if err != nil {
-		return
-	}
 	if os.MkdirAll(filepath.Dir(c.file), 0o755) != nil {
 		return
 	}
-	if os.WriteFile(c.file, data, 0o644) == nil && c.legacy != "" {
-		os.Remove(c.legacy)
+	if os.WriteFile(c.file, encodeCache(c.Entries), 0o644) == nil {
+		for _, lf := range c.legacy {
+			os.Remove(lf)
+		}
 	}
 }
 
@@ -871,6 +1148,325 @@ func moveFile(src, dst string) error {
 		return err
 	}
 	return os.Remove(src)
+}
+
+// organizeFiles copies (or, with move set, moves) every indexed file that
+// is not a duplicate copy into dir/<Category>/ (Applications, Documents,
+// Music, ...), creating the tree as needed. Every file is verified before
+// it counts: the destination is re-read from disk and its SHA-256 must
+// match the source's — and in move mode the source is deleted only after
+// that verification succeeds, so no content is ever lost to a bad copy.
+// A destination file that already holds a source's exact content is reused
+// rather than copied again (in move mode the redundant source is deleted),
+// so re-running into the same directory converges instead of piling up
+// suffixed copies. Per-file failures are logged and skipped; only a failure
+// to create a category directory is fatal. A non-empty logPath appends
+// every action taken this run to that file.
+func organizeFiles(root, dir string, results []catResult, move bool, logPath string) error {
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(root, dir)
+	}
+	if logPath != "" && !filepath.IsAbs(logPath) {
+		logPath = filepath.Join(root, logPath)
+	}
+	var actions []string
+	logAct := func(action, src, detail string) {
+		if logPath != "" {
+			actions = append(actions, action+"\t"+src+"\t"+detail)
+		}
+	}
+	mode := "copying — sources are left in place"
+	if move {
+		mode = "moving — sources are deleted after verification"
+	}
+	fmt.Printf("  %s %s %s\n", green("●"), bold("Organizing files into "+tildePath(dir)), dim("· "+mode))
+	var copied, present, skippedDups, failed, undeleted int
+	var copiedSize int64
+	var failures []organizeFailure
+	for _, r := range results {
+		// originalOf lets the action log say which kept original a skipped
+		// duplicate copy matches.
+		originalOf := map[string]string{}
+		if logPath != "" {
+			for _, g := range r.groups {
+				for _, d := range g[1:] {
+					originalOf[d.path] = g[0].path
+				}
+			}
+		}
+		var files []*fileEntry
+		for _, e := range r.entries {
+			if e.dup {
+				skippedDups++
+				logAct("skipped-duplicate", e.path, "duplicate of "+originalOf[e.path])
+				continue
+			}
+			files = append(files, e)
+		}
+		if len(files) == 0 {
+			continue
+		}
+		catDir := filepath.Join(dir, r.cat.label)
+		if err := os.MkdirAll(catDir, 0o755); err != nil {
+			return err
+		}
+		sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
+		fmt.Printf("\n  %s %s %s\n", c256(r.cat.hue, "●"), bold(r.cat.label),
+			dim(fmt.Sprintf("· %d files → %s", len(files), relPath(root, catDir))))
+		hue := func(s string) string { return c256(r.cat.hue, s) }
+		taken := map[string]bool{}
+		for i, e := range files {
+			conn := dim("├")
+			switch {
+			case len(files) == 1:
+				conn = dim("─")
+			case i == 0:
+				conn = dim("┌")
+			case i == len(files)-1:
+				conn = dim("╰")
+			}
+			name, already, err := destName(catDir, e, taken)
+			if err == nil && !already {
+				err = copyFileVerified(e.path, filepath.Join(catDir, name))
+			}
+			if err != nil {
+				failed++
+				failures = append(failures, organizeFailure{path: e.path, reason: err.Error()})
+				logAct("failed", e.path, err.Error())
+				fmt.Printf("  %s %s %s %s\n", conn, red("!"), stylePath(relPath(root, e.path), red), dim(err.Error()))
+				continue
+			}
+			dst := filepath.Join(catDir, name)
+			if already {
+				present++
+			} else {
+				copied++
+				copiedSize += e.size
+			}
+			// The destination is verified at this point; in move mode
+			// deleting the source is now safe.
+			if move {
+				if rmErr := os.Remove(e.path); rmErr != nil {
+					undeleted++
+					what := "copied and verified"
+					if already {
+						what = "already present"
+					}
+					reason := what + ", but the source could not be deleted: " + rmErr.Error()
+					failures = append(failures, organizeFailure{path: e.path, reason: reason})
+					logAct("source-not-deleted", e.path, reason)
+					fmt.Printf("  %s %s %s %s\n", conn, yellow("!"), stylePath(relPath(root, e.path), yellow), dim(reason))
+					continue
+				}
+			}
+			if already {
+				note, action := "already present", "already-present"
+				if move {
+					note, action = "already present · source deleted", "already-present-source-deleted"
+				}
+				logAct(action, e.path, dst)
+				fmt.Printf("  %s %s %s %s\n", conn, dim("≡"), dim(relPath(root, e.path)), dim(ital(note)))
+				continue
+			}
+			action := "copied"
+			if move {
+				action = "moved"
+			}
+			logAct(action, e.path, dst)
+			note := ""
+			if name != filepath.Base(e.path) {
+				note = " " + dim("as "+name)
+			}
+			fmt.Printf("  %s %s %s%s\n", conn, green("→"), stylePath(relPath(root, e.path), hue), note)
+		}
+	}
+	verb, verbPast := "copy", "copied"
+	if move {
+		verb, verbPast = "move", "moved"
+	}
+	logNote := func() {
+		if logPath == "" {
+			return
+		}
+		err := appendOrganizeLog(logPath, move, root, dir, actions,
+			fmt.Sprintf("%d %s, %d already present, %d duplicate copies skipped, %d failed, %d sources not deleted",
+				copied, verbPast, present, skippedDups, failed, undeleted))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "quickap: could not write the action log:", err)
+			return
+		}
+		fmt.Printf("  %s\n", dim("action log: "+tildePath(logPath)))
+	}
+	if copied+present+failed == 0 {
+		fmt.Printf("  %s\n", dim("nothing to organize — no files found"))
+		logNote()
+		fmt.Println()
+		return nil
+	}
+	var notes []string
+	if copied > 0 {
+		if move {
+			notes = append(notes, "every file verified by SHA-256 before its source was deleted")
+		} else {
+			notes = append(notes, "every copy verified by SHA-256")
+		}
+	}
+	if skippedDups > 0 {
+		notes = append(notes, fmt.Sprintf("%d duplicate copies skipped", skippedDups))
+	}
+	if present > 0 {
+		notes = append(notes, fmt.Sprintf("%d already present", present))
+	}
+	var note string
+	if len(notes) > 0 {
+		note = "· " + strings.Join(notes, " · ")
+	}
+	summary := fmt.Sprintf("organized %d files (%s) into %s", copied, humanSize(copiedSize), tildePath(dir))
+	if copied == 0 && failed == 0 && undeleted == 0 {
+		summary = "nothing new to " + verb + " — " + tildePath(dir) + " is already up to date"
+	}
+	fmt.Printf("\n  %s %s %s\n", green("✔"), green(summary), dim(note))
+	if failed > 0 {
+		fmt.Printf("  %s\n", red(fmt.Sprintf("! %d files could not be %s", failed, verbPast)))
+	}
+	if undeleted > 0 {
+		fmt.Printf("  %s\n", yellow(fmt.Sprintf("! %d sources could not be deleted — their verified copies are in %s", undeleted, tildePath(dir))))
+	}
+	listPath := filepath.Join(dir, organizeFailuresName)
+	if len(failures) > 0 {
+		if err := writeOrganizeFailures(listPath, verbPast, failures); err != nil {
+			fmt.Fprintln(os.Stderr, "quickap: could not write the failure list:", err)
+		} else {
+			fmt.Printf("  %s\n", dim("failure list: "+tildePath(listPath)))
+		}
+	} else {
+		// A clean run makes a failure list from a previous run stale and
+		// misleading; remove it.
+		os.Remove(listPath)
+	}
+	logNote()
+	fmt.Println()
+	return nil
+}
+
+// appendOrganizeLog appends one organize run to the action log at path: a
+// commented header, one tab-separated "action, source path, destination or
+// detail" line per action, and a commented summary. Appending (rather than
+// overwriting) keeps the history of earlier runs.
+func appendOrganizeLog(path string, move bool, root, dir string, actions []string, summary string) error {
+	mode := "copy"
+	if move {
+		mode = "move"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# quickap organize log · %s · mode: %s · %s → %s\n",
+		time.Now().Format("2006-01-02 15:04:05"), mode, root, dir)
+	b.WriteString("# format: <action> <TAB> <source path> <TAB> <destination or detail>\n")
+	for _, a := range actions {
+		b.WriteString(a + "\n")
+	}
+	b.WriteString("# summary: " + summary + "\n")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(b.String()); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// organizeFailuresName is the file organizeFiles writes into the
+// destination directory when files could not be copied or moved. A run
+// without failures removes it again.
+const organizeFailuresName = "quickap-organize-failures.txt"
+
+// organizeFailure records one file organize could not handle and why.
+type organizeFailure struct {
+	path   string // absolute source path
+	reason string
+}
+
+// writeOrganizeFailures writes the failure list: a commented header
+// followed by one tab-separated "source path, reason" line per file.
+func writeOrganizeFailures(path, verbPast string, failures []organizeFailure) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# quickap organize failures · %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&b, "# %d files could not be %s · format: <source path> <TAB> <reason>\n", len(failures), verbPast)
+	for _, f := range failures {
+		b.WriteString(f.path + "\t" + f.reason + "\n")
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// destName picks the destination filename for e inside catDir: the original
+// base name, or a numeric-suffixed variant (a.jpg, a-2.jpg) when that name
+// is claimed by a file organized earlier this run (tracked in taken, keyed
+// case-insensitively so nothing is overwritten on case-insensitive
+// filesystems) or by a different file already on disk. A file already on
+// disk with e's exact content short-circuits with already=true: the copy
+// would be redundant.
+func destName(catDir string, e *fileEntry, taken map[string]bool) (name string, already bool, err error) {
+	base := filepath.Base(e.path)
+	srcHash := e.hash // set during duplicate detection; empty for most files
+	name = base
+	for n := 2; ; n++ {
+		if !taken[strings.ToLower(name)] {
+			dst := filepath.Join(catDir, name)
+			if _, statErr := os.Lstat(dst); os.IsNotExist(statErr) {
+				taken[strings.ToLower(name)] = true
+				return name, false, nil
+			}
+			if srcHash == "" {
+				if srcHash, err = hashFile(e.path); err != nil {
+					return "", false, err
+				}
+			}
+			if h, hashErr := hashFile(dst); hashErr == nil && h == srcHash {
+				taken[strings.ToLower(name)] = true
+				return name, true, nil
+			}
+		}
+		ext := filepath.Ext(base)
+		name = strings.TrimSuffix(base, ext) + fmt.Sprintf("-%d", n) + ext
+	}
+}
+
+// copyFileVerified copies src to dst and verifies the result: the
+// destination is re-read from disk and its SHA-256 must match the hash of
+// the bytes that were read from src. On any error or mismatch the partial
+// destination is removed.
+func copyFileVerified(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	h := sha256.New()
+	if _, err := io.Copy(out, io.TeeReader(in, h)); err != nil {
+		out.Close()
+		os.Remove(dst)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(dst)
+		return err
+	}
+	dstHash, err := hashFile(dst)
+	if err != nil {
+		os.Remove(dst)
+		return err
+	}
+	if dstHash != hex.EncodeToString(h.Sum(nil)) {
+		os.Remove(dst)
+		return fmt.Errorf("copy verification failed: %s does not match its source", filepath.Base(dst))
+	}
+	return nil
 }
 
 // deleteGroups removes every duplicate file, keeping each group's original
@@ -1085,7 +1681,7 @@ func renderSection(cat category, stats map[string]*extStat, t totals) {
 	}
 }
 
-func renderFooter(skipped int, elapsed time.Duration, hs hashStats, verbose bool) {
+func renderFooter(skipped int, elapsed time.Duration, hs hashStats, cache *hashCache, noCache bool, verbose bool) {
 	// Unreadable entries are surfaced even without -verbose — that's a
 	// warning, not detail.
 	if !verbose && skipped > 0 {
@@ -1110,7 +1706,46 @@ func renderFooter(skipped int, elapsed time.Duration, hs hashStats, verbose bool
 	if skipped > 0 {
 		note += fmt.Sprintf(" · %d entries unreadable", skipped)
 	}
-	fmt.Printf("\n  %s\n\n", dim(note))
+	// CPU time and peak RSS come from the OS where available (Unix);
+	// elsewhere fall back to the Go runtime's own heap figure.
+	var usageNote string
+	if cpu, peakRSS, ok := procUsage(); ok {
+		usageNote = "cpu: " + cpu.Round(unit).String()
+		if elapsed > 0 {
+			usageNote += fmt.Sprintf(" · %.0f%% of one core", float64(cpu)/float64(elapsed)*100)
+		}
+		usageNote += " · peak memory: " + humanSize(peakRSS)
+	} else {
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		usageNote = "memory: " + humanSize(int64(ms.HeapInuse)) + " heap in use"
+	}
+	var cacheNote string
+	switch {
+	case noCache:
+		cacheNote = "hash cache disabled (-no-cache)"
+	case cache == nil:
+		cacheNote = "hash cache unavailable (no user cache directory)"
+	default:
+		cacheNote = "hash cache: " + tildePath(cache.file)
+	}
+	fmt.Printf("\n  %s\n  %s\n  %s\n\n", dim(note), dim(usageNote), dim(cacheNote))
+}
+
+// tildePath abbreviates a path under the user's home directory to ~/...
+// for display.
+func tildePath(p string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	if p == home {
+		return "~"
+	}
+	if strings.HasPrefix(p, home+string(filepath.Separator)) {
+		return "~" + p[len(home):]
+	}
+	return p
 }
 
 // renderGroups prints each duplicate group with its file paths.
@@ -1132,14 +1767,24 @@ func renderGroups(root string, cat category, groups [][]*fileEntry) {
 			if j == 0 {
 				conn = dim("┌")
 			}
-			marker, note := yellow("✗ "+relPath(root, e.path)), ""
+			marker, note := yellow("✗ ")+stylePath(relPath(root, e.path), yellow), ""
 			if j == 0 {
-				marker, note = green("✓ "+relPath(root, e.path)), " "+dim(ital("original"))
+				marker, note = green("✓ ")+stylePath(relPath(root, e.path), green), " "+dim(ital("original"))
 			}
 			fmt.Printf("  %s %s%s\n", conn, marker, note)
 		}
 	}
 	fmt.Println()
+}
+
+// stylePath renders a relative path with its directory part dimmed and
+// the file name run through color, so names pop in long listings.
+func stylePath(rel string, color func(string) string) string {
+	dir, name := filepath.Split(rel)
+	if dir == "" {
+		return color(name)
+	}
+	return dim(dir) + color(name)
 }
 
 // renderUnique prints every unique file with its path and size. Unique
@@ -1159,6 +1804,7 @@ func renderUnique(root string, cat category, entries []*fileEntry) {
 		fmt.Printf("  %s\n\n", dim("no unique "+cat.key+" found"))
 		return
 	}
+	hue := func(s string) string { return c256(cat.hue, s) }
 	for i, e := range uniq {
 		conn := dim("├")
 		switch {
@@ -1169,7 +1815,48 @@ func renderUnique(root string, cat category, entries []*fileEntry) {
 		case i == len(uniq)-1:
 			conn = dim("╰")
 		}
-		fmt.Printf("  %s %s %s\n", conn, relPath(root, e.path), dim("· "+humanSize(e.size)))
+		fmt.Printf("  %s %s %s\n", conn, stylePath(relPath(root, e.path), hue), dim("· "+humanSize(e.size)))
+	}
+	fmt.Println()
+}
+
+// renderLarge prints the largest files, largest first, capped at 50.
+func renderLarge(root string, cat category, entries []*fileEntry) {
+	const limit = 50
+	sorted := make([]*fileEntry, len(entries))
+	copy(sorted, entries)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].size != sorted[j].size {
+			return sorted[i].size > sorted[j].size
+		}
+		return sorted[i].path < sorted[j].path
+	})
+	shown := sorted
+	if len(shown) > limit {
+		shown = shown[:limit]
+	}
+	head := fmt.Sprintf("Largest %s files (%d)", cat.singular, len(shown))
+	if len(sorted) > limit {
+		head = fmt.Sprintf("Largest %s files (top %d of %d)", cat.singular, limit, len(sorted))
+	}
+	fmt.Printf("  %s %s\n", c256(cat.hue, "●"), bold(head))
+	if len(shown) == 0 {
+		fmt.Printf("  %s\n\n", dim("no "+cat.key+" found"))
+		return
+	}
+	hue := func(s string) string { return c256(cat.hue, s) }
+	for i, e := range shown {
+		conn := dim("├")
+		switch {
+		case len(shown) == 1:
+			conn = dim("─")
+		case i == 0:
+			conn = dim("┌")
+		case i == len(shown)-1:
+			conn = dim("╰")
+		}
+		// Size leads the color here — it is what -list-large is about.
+		fmt.Printf("  %s %s %s %s\n", conn, stylePath(relPath(root, e.path), hue), dim("·"), yellow(humanSize(e.size)))
 	}
 	fmt.Println()
 }
@@ -1253,17 +1940,34 @@ func printCommandBlock(c cmdHelp) {
 	h("  " + cyan("-list-unique") + "     list unique " + scope + "files — every file that is not a")
 	h("                   duplicate copy, as counted by the unique column")
 	h("                   (shorthand: " + cyan("-lu") + ")")
+	h("  " + cyan("-list-large") + "      list the 50 largest " + scope + "files, largest first")
+	h("                   (shorthand: " + cyan("-ll") + ")")
+	h("  " + cyan("-organize DIR") + "    copy every indexed " + scope + "file that is not a duplicate")
+	h("                   copy into DIR/<Category>/, verifying each copy against")
+	h("                   its source by SHA-256; sources are left in place, and")
+	h("                   files already present in DIR with identical content")
+	h("                   are not copied again; excludes -move and -delete")
+	h("  " + cyan("-organize-move DIR"))
+	h("                   like -organize, but move the files: each one is")
+	h("                   hash-verified at the destination before its source is")
+	h("                   deleted; skipped duplicate copies are left in place")
+	h("                   (both modes list any files that could not be handled")
+	h("                   in DIR/" + organizeFailuresName + ")")
+	h("  " + cyan("-organize-log FILE"))
+	h("                   append every action -organize/-organize-move takes")
+	h("                   (copied, moved, already present, skipped duplicates,")
+	h("                   failures) to FILE, one tab-separated line per action")
 	if c.actions {
 		h("  " + cyan("-move DIR") + "        move each duplicate " + c.scope + " group (original +")
 		h("                   copies) into " + c.moveDest + "group-NNN/ for manual")
 		h("                   sorting; DIR is created if needed, resolved relative")
-		h("                   to the current directory")
+		h("                   to the scanned directory")
 		h("  " + cyan("-delete") + "          " + red("permanently delete") + " duplicate " + c.scope + " files,")
 		h("                   keeping each group's original; excludes -move")
 	}
 	h("  " + cyan("-ignore DIR") + "      skip a directory while scanning; a bare name")
 	h("                   (node_modules) skips every dir with that name, a path")
-	h("                   (files/cache) skips that path relative to the current")
+	h("                   (files/cache) skips that path relative to the scanned")
 	h("                   directory; repeat or comma-separate for multiple")
 	h("  " + cyan("-hidden") + "          include hidden directories (.foo/) in the scan")
 	h("  " + cyan("-no-cache") + "        disable the hash cache for this run")
@@ -1273,8 +1977,9 @@ func printCommandBlock(c cmdHelp) {
 	h("                   scan re-hashes from scratch")
 	h("  " + cyan("-spacious") + "        add vertical space between table rows for easier")
 	h("                   reading (default is compact)")
-	h("  " + cyan("-verbose") + "         show scan details: timing, hash-cache stats, and")
-	h("                   hints (shorthand: " + cyan("-vv") + ")")
+	h("  " + cyan("-verbose") + "         show scan details: a live progress line while the")
+	h("                   scan runs, timing, cpu and memory usage, hash-cache")
+	h("                   stats and location, and hints (shorthand: " + cyan("-vv") + ")")
 	h("  " + cyan("-version") + "         print version and exit")
 	h("  " + cyan("-help") + "            show help for this command")
 }
@@ -1306,9 +2011,10 @@ func printHelp() {
 	fmt.Println()
 	h("  Indexes application, archive, document, image, video, and music")
 	h("  files under a directory (recursive), plus an \"other\" category")
-	h("  for every file outside those — the current directory by default,")
-	h("  or the one given as the last argument. The bare command prints a")
-	h("  compact overview of every category; a category command prints")
+	h("  for every file outside those — your home directory by default,")
+	h("  or the one given as the last argument. The report header always")
+	h("  shows the running user's home directory. The bare command prints")
+	h("  a compact overview of every category; a category command prints")
 	h("  detailed per-extension stats and enables -move/-delete.")
 	fmt.Println()
 	h(bold(magenta("COMMANDS")))
@@ -1330,9 +2036,27 @@ func printHelp() {
 	h("                   (shorthand: " + cyan("-ld") + ")")
 	h("  " + cyan("-list-unique") + "     list unique files — every file that is not a duplicate")
 	h("                   copy, as counted by the unique column (shorthand: " + cyan("-lu") + ")")
+	h("  " + cyan("-list-large") + "      list the 50 largest files, largest first")
+	h("                   (shorthand: " + cyan("-ll") + ")")
+	h("  " + cyan("-organize DIR") + "    copy every indexed file that is not a duplicate copy")
+	h("                   into DIR/<Category>/ (Applications, Documents, Music,")
+	h("                   ...), verifying each copy against its source by")
+	h("                   SHA-256; sources are left in place, and files already")
+	h("                   present in DIR with identical content are not copied")
+	h("                   again; excludes -move and -delete")
+	h("  " + cyan("-organize-move DIR"))
+	h("                   like -organize, but move the files: each one is")
+	h("                   hash-verified at the destination before its source is")
+	h("                   deleted; skipped duplicate copies are left in place")
+	h("                   (both modes list any files that could not be handled")
+	h("                   in DIR/" + organizeFailuresName + ")")
+	h("  " + cyan("-organize-log FILE"))
+	h("                   append every action -organize/-organize-move takes")
+	h("                   (copied, moved, already present, skipped duplicates,")
+	h("                   failures) to FILE, one tab-separated line per action")
 	h("  " + cyan("-ignore DIR") + "      skip a directory while scanning; a bare name")
 	h("                   (node_modules) skips every dir with that name, a path")
-	h("                   (files/cache) skips that path relative to the current")
+	h("                   (files/cache) skips that path relative to the scanned")
 	h("                   directory; repeat or comma-separate for multiple")
 	h("  " + cyan("-hidden") + "          include hidden directories (.foo/) in the scan")
 	h("  " + cyan("-no-cache") + "        disable the hash cache for this run")
@@ -1342,8 +2066,9 @@ func printHelp() {
 	h("                   scan re-hashes from scratch")
 	h("  " + cyan("-spacious") + "        add vertical space between table rows for easier")
 	h("                   reading (default is compact)")
-	h("  " + cyan("-verbose") + "         show scan details: timing, hash-cache stats, and")
-	h("                   hints (shorthand: " + cyan("-vv") + ")")
+	h("  " + cyan("-verbose") + "         show scan details: a live progress line while the")
+	h("                   scan runs, timing, cpu and memory usage, hash-cache")
+	h("                   stats and location, and hints (shorthand: " + cyan("-vv") + ")")
 	h("  " + cyan("-version") + "         print version and exit")
 	h("  " + cyan("-help") + "            show help for the current command")
 	fmt.Println()
@@ -1381,8 +2106,25 @@ func printHelp() {
 	h("  · -move modifies your files — the summary report always shows the")
 	h("    state before moving; colliding filenames within a group get a")
 	h("    numeric suffix (a.jpg, a-2.jpg)")
-	h("  · a -move target inside the current directory will be re-indexed on")
-	h("    the next run; use a target outside it (e.g. ../dupes) to avoid that")
+	h("  · -organize copies — sources are untouched; every copy is verified by")
+	h("    re-reading the destination and comparing SHA-256 hashes, duplicate")
+	h("    copies are skipped so each unique content lands exactly once, and")
+	h("    colliding filenames get a numeric suffix (a.jpg, a-2.jpg)")
+	h("  · -organize-move gives the same result but deletes each source once")
+	h("    its file is hash-verified at the destination — a file is never")
+	h("    deleted before its content is confirmed safe; duplicate copies are")
+	h("    skipped and left in place (use -delete on a category to remove them)")
+	h("  · files -organize/-organize-move could not copy or move are written,")
+	h("    with reasons, to " + organizeFailuresName + " in the target")
+	h("    directory; a later run without failures removes that list again")
+	h("  · -organize-log FILE appends a full audit trail of an organize run:")
+	h("    a header (time, mode, directories), one tab-separated line per")
+	h("    action with source and destination or reason, and a summary; runs")
+	h("    accumulate in the file, and a relative FILE resolves against the")
+	h("    scanned directory")
+	h("  · a -move, -organize, or -organize-move target inside the current")
+	h("    directory will be re-indexed on the next run; use a target outside")
+	h("    it (e.g. ../sorted) to avoid that")
 	h("  · colors turn off automatically when piped, or set NO_COLOR=1")
 	fmt.Println()
 }
