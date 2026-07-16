@@ -31,6 +31,41 @@ func TestHumanSize(t *testing.T) {
 	}
 }
 
+func TestComma(t *testing.T) {
+	cases := []struct {
+		in   int64
+		want string
+	}{
+		{0, "0"},
+		{7, "7"},
+		{999, "999"},
+		{1000, "1,000"},
+		{123456, "123,456"},
+		{1234567, "1,234,567"},
+		{-1234567, "-1,234,567"},
+	}
+	for _, c := range cases {
+		if got := comma(c.in); got != c.want {
+			t.Errorf("comma(%d) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestProcUsage(t *testing.T) {
+	cpu, peakRSS, ok := procUsage()
+	if !ok {
+		t.Skip("procUsage unavailable on this platform")
+	}
+	if cpu < 0 {
+		t.Errorf("cpu = %v, want >= 0", cpu)
+	}
+	// The test binary certainly occupies more than 1 MB and (as of 2026)
+	// less than 1 TB.
+	if peakRSS < 1<<20 || peakRSS > 1<<40 {
+		t.Errorf("peakRSS = %d, want a plausible process size", peakRSS)
+	}
+}
+
 func TestStripANSI(t *testing.T) {
 	in := "\x1b[1m\x1b[36mhello\x1b[0m world"
 	if got := stripANSI(in); got != "hello world" {

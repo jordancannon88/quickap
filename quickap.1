@@ -238,9 +238,12 @@ Add vertical space between table rows for easier reading.
 The default is compact.
 .TP
 .BR \-verbose ", " \-vv
-Show scan details below the report: timing, hash-cache statistics
-(e.g.\& \(lq12 hashed, 240 from cache\(rq), the location of the hash
-cache file, and hints.
+Show scan details: while the scan runs, a live status line on standard
+error (directories read, files indexed, then duplicate candidates
+hashed and bytes read \(em only when standard error is a terminal, so
+piped output stays clean); below the report, timing, CPU time and peak
+memory usage, hash-cache statistics (e.g.\& \(lq12 hashed, 240 from
+cache\(rq), the location of the hash cache file, and hints.
 Off by default.
 Unreadable entries are always reported, even without this flag.
 .TP

@@ -202,7 +202,7 @@ failures removes it again.
 | `-verify`                 | Re-hash every duplicate candidate, ignoring cached hashes. |
 | `-clear-cache`            | Delete the hash cache and exit. |
 | `-spacious`               | Add vertical space between table rows; default is compact. |
-| `-verbose`, `-vv`         | Show scan timing, hash-cache stats and location, and hints. |
+| `-verbose`, `-vv`         | Show a live progress line while the scan runs, plus timing, CPU and memory usage, hash-cache stats and location, and hints. |
 | `-version`                | Print the version and exit. |
 | `-help`                   | Show help for the current command. |
 
@@ -291,10 +291,25 @@ Flags stack freely on any command:
   exactly which file each group keeps — review it before `-delete`.
 - **Hashes are cached between runs** and reused while a file's size and
   mtime are unchanged, so repeat scans only read new or modified files.
-  Run with `-vv` to see the split (`12 hashed, 240 from cache`) and
-  where the cache file lives.
+  The first scan of a tree is therefore the slow one; see
+  [the hash cache](#the-hash-cache) below. Run with `-vv` to see the
+  split (`12 hashed, 240 from cache`) and where the cache file lives.
+- **`-vv` shows what's happening while you wait**: a live status line
+  (directories read, files indexed, then candidates hashed and bytes
+  read) while the scan runs, and CPU time plus peak memory in the
+  report footer. The live line only appears on a terminal — piped
+  output stays clean.
 
 ### The hash cache
+
+**Expect the first run to be slow — later runs are much faster.** With
+no cache built yet, every duplicate candidate (every file that shares
+its byte size with another) has to be read and hashed in full, so the
+first scan of a large tree can take a while. That work is saved: from
+the second run on, cached hashes are reused and only new or modified
+files are read, so repeat scans typically finish in a small fraction
+of the time — metadata checks instead of file reads. Run with `-vv` to
+watch it happen.
 
 | Platform | Location |
 | -------- | -------- |

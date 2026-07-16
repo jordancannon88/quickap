@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -242,6 +243,83 @@ func tRow(widths []int, aligns string, cells ...string) string {
 	return b.String()
 }
 
+// Live -vv progress: the walk and hash workers bump these counters
+// atomically, and a ticker goroutine repaints one status line on stderr
+// until the run's report is ready.
+var (
+	progressPhase  atomic.Value // "scan" or "hash"
+	progressDirs   atomic.Int64 // directories read
+	progressFiles  atomic.Int64 // files indexed
+	progressHashed atomic.Int64 // duplicate candidates hashed
+	progressBytes  atomic.Int64 // bytes read for hashing
+	progressCached atomic.Int64 // candidate hashes reused from the cache
+)
+
+// startProgress begins repainting the live status line when verbose is
+// set and stderr is a terminal (piped runs stay clean). The returned
+// stop function erases the line again; call it before the report prints.
+func startProgress(verbose bool) (stop func()) {
+	fi, err := os.Stderr.Stat()
+	if !verbose || err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+		return func() {}
+	}
+	progressPhase.Store("scan")
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		spinner := []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+		start := time.Now()
+		ticker := time.NewTicker(120 * time.Millisecond)
+		defer ticker.Stop()
+		for i := 0; ; i++ {
+			select {
+			case <-done:
+				fmt.Fprint(os.Stderr, "\r\x1b[2K")
+				return
+			case <-ticker.C:
+			}
+			var status string
+			if progressPhase.Load() == "hash" {
+				status = fmt.Sprintf("hashing duplicate candidates · %s hashed (%s) · %s from cache",
+					comma(progressHashed.Load()), humanSize(progressBytes.Load()), comma(progressCached.Load()))
+			} else {
+				status = fmt.Sprintf("scanning · %s dirs · %s files indexed",
+					comma(progressDirs.Load()), comma(progressFiles.Load()))
+			}
+			fmt.Fprintf(os.Stderr, "\r\x1b[2K  %c %s · %s",
+				spinner[i%len(spinner)], status, time.Since(start).Round(time.Second/10))
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
+	}
+}
+
+// comma renders n with thousands separators for the progress line.
+func comma(n int64) string {
+	s := fmt.Sprintf("%d", n)
+	neg := ""
+	if s[0] == '-' {
+		neg, s = "-", s[1:]
+	}
+	if len(s) <= 3 {
+		return neg + s
+	}
+	var b strings.Builder
+	pre := len(s) % 3
+	if pre == 0 {
+		pre = 3
+	}
+	b.WriteString(s[:pre])
+	for i := pre; i < len(s); i += 3 {
+		b.WriteString(",")
+		b.WriteString(s[i : i+3])
+	}
+	return neg + b.String()
+}
+
 func humanSize(b int64) string {
 	const unit = 1024
 	if b < unit {
@@ -313,7 +391,7 @@ func main() {
 	verify := fs.Bool("verify", false, "re-hash all duplicate candidates, ignoring cached hashes")
 	clearCache := fs.Bool("clear-cache", false, "delete the hash cache and exit")
 	var verbose bool
-	fs.BoolVar(&verbose, "verbose", false, "show scan details (timing, hash-cache stats and location, hints)")
+	fs.BoolVar(&verbose, "verbose", false, "show scan details (live progress, timing, cpu and memory usage, hash-cache stats and location, hints)")
 	fs.BoolVar(&verbose, "vv", false, "shorthand for -verbose")
 	fs.BoolVar(&spacious, "spacious", false, "add vertical space between table rows (default: compact)")
 	organizeDir := fs.String("organize", "", "copy every indexed file that is not a duplicate copy into `DIR`, one subdirectory per category, verifying each copy by hash")
@@ -399,12 +477,14 @@ func main() {
 	}
 
 	start := time.Now()
+	stopProgress := startProgress(verbose)
 	byCategory, skipped := scan(root, active, *hidden, ignores)
 
 	var cache *hashCache
 	if !*noCache {
 		cache = loadCache(root)
 	}
+	progressPhase.Store("hash")
 	var hs hashStats
 	var results []catResult
 	for _, cat := range active {
@@ -442,6 +522,7 @@ func main() {
 	}
 	cache.save()
 	elapsed := time.Since(start)
+	stopProgress()
 
 	fmt.Println()
 	fmt.Printf("  %s %s\n", bold(magenta("◆ quickap")), dim("· file index"))
@@ -570,6 +651,7 @@ func scan(root string, active []category, includeHidden bool, ignores []string) 
 			mu.Unlock()
 			return
 		}
+		progressDirs.Add(1)
 		var hits []hit
 		unreadable := 0
 		for _, d := range dirents {
@@ -608,6 +690,7 @@ func scan(root string, active []category, includeHidden bool, ignores []string) 
 				break
 			}
 		}
+		progressFiles.Add(int64(len(hits)))
 		if len(hits) == 0 && unreadable == 0 {
 			return
 		}
@@ -660,6 +743,7 @@ func findDuplicates(entries []*fileEntry, cache *hashCache, verify bool) ([][]*f
 			if h, ok := cache.get(e.path, e.size, e.mtime); ok {
 				e.hash = h
 				stats.cached++
+				progressCached.Add(1)
 				continue
 			}
 		}
@@ -675,6 +759,8 @@ func findDuplicates(entries []*fileEntry, cache *hashCache, verify bool) ([][]*f
 				unreadable++
 				return
 			}
+			progressHashed.Add(1)
+			progressBytes.Add(e.size)
 			e.hash = h
 			cache.put(e.path, e.size, e.mtime, h)
 			stats.hashed++
@@ -1620,6 +1706,20 @@ func renderFooter(skipped int, elapsed time.Duration, hs hashStats, cache *hashC
 	if skipped > 0 {
 		note += fmt.Sprintf(" · %d entries unreadable", skipped)
 	}
+	// CPU time and peak RSS come from the OS where available (Unix);
+	// elsewhere fall back to the Go runtime's own heap figure.
+	var usageNote string
+	if cpu, peakRSS, ok := procUsage(); ok {
+		usageNote = "cpu: " + cpu.Round(unit).String()
+		if elapsed > 0 {
+			usageNote += fmt.Sprintf(" · %.0f%% of one core", float64(cpu)/float64(elapsed)*100)
+		}
+		usageNote += " · peak memory: " + humanSize(peakRSS)
+	} else {
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		usageNote = "memory: " + humanSize(int64(ms.HeapInuse)) + " heap in use"
+	}
 	var cacheNote string
 	switch {
 	case noCache:
@@ -1629,7 +1729,7 @@ func renderFooter(skipped int, elapsed time.Duration, hs hashStats, cache *hashC
 	default:
 		cacheNote = "hash cache: " + tildePath(cache.file)
 	}
-	fmt.Printf("\n  %s\n  %s\n\n", dim(note), dim(cacheNote))
+	fmt.Printf("\n  %s\n  %s\n  %s\n\n", dim(note), dim(usageNote), dim(cacheNote))
 }
 
 // tildePath abbreviates a path under the user's home directory to ~/...
@@ -1877,8 +1977,9 @@ func printCommandBlock(c cmdHelp) {
 	h("                   scan re-hashes from scratch")
 	h("  " + cyan("-spacious") + "        add vertical space between table rows for easier")
 	h("                   reading (default is compact)")
-	h("  " + cyan("-verbose") + "         show scan details: timing, hash-cache stats and")
-	h("                   location, and hints (shorthand: " + cyan("-vv") + ")")
+	h("  " + cyan("-verbose") + "         show scan details: a live progress line while the")
+	h("                   scan runs, timing, cpu and memory usage, hash-cache")
+	h("                   stats and location, and hints (shorthand: " + cyan("-vv") + ")")
 	h("  " + cyan("-version") + "         print version and exit")
 	h("  " + cyan("-help") + "            show help for this command")
 }
@@ -1965,8 +2066,9 @@ func printHelp() {
 	h("                   scan re-hashes from scratch")
 	h("  " + cyan("-spacious") + "        add vertical space between table rows for easier")
 	h("                   reading (default is compact)")
-	h("  " + cyan("-verbose") + "         show scan details: timing, hash-cache stats and")
-	h("                   location, and hints (shorthand: " + cyan("-vv") + ")")
+	h("  " + cyan("-verbose") + "         show scan details: a live progress line while the")
+	h("                   scan runs, timing, cpu and memory usage, hash-cache")
+	h("                   stats and location, and hints (shorthand: " + cyan("-vv") + ")")
 	h("  " + cyan("-version") + "         print version and exit")
 	h("  " + cyan("-help") + "            show help for the current command")
 	fmt.Println()
