@@ -7,7 +7,9 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -530,49 +532,100 @@ func ignoredDir(root, path string, patterns []string) bool {
 // directories always; unreadable entries are counted, not fatal.
 // Non-regular files (symlinks, sockets, FIFOs, devices) are ignored:
 // never followed, indexed, or hashed.
+//
+// Directories are walked in parallel — the walk is syscall-bound
+// (one ReadDir per directory plus one lstat per matched file), so a
+// bounded pool of goroutines keeps the kernel busy where a serial walk
+// would wait on one call at a time. Each directory batches its results
+// and takes the shared lock once.
 func scan(root string, active []category, includeHidden bool, ignores []string) (map[string][]*fileEntry, int) {
+	type hit struct {
+		key string
+		e   *fileEntry
+	}
 	byCategory := map[string][]*fileEntry{}
 	var skipped int
-	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	var mu sync.Mutex
+	// The pool is sized for outstanding filesystem requests, not CPU
+	// work, so it gets a floor: even a single-core machine profits from
+	// overlapping disk waits on a cold directory cache.
+	workers := 4 * runtime.NumCPU()
+	if workers < 16 {
+		workers = 16
+	}
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	var walk func(dir string)
+	walk = func(dir string) {
+		defer wg.Done()
+		// Subdirectory goroutines spawned below block on sem until this
+		// directory releases its slot; a parent never waits on its
+		// children, so holding the slot while spawning cannot deadlock.
+		sem <- struct{}{}
+		defer func() { <-sem }()
+		dirents, err := os.ReadDir(dir)
 		if err != nil {
+			mu.Lock()
 			skipped++
-			return nil
+			mu.Unlock()
+			return
 		}
-		if d.IsDir() {
-			if path == root {
-				return nil
-			}
-			if !includeHidden && strings.HasPrefix(d.Name(), ".") {
-				return filepath.SkipDir
-			}
-			if ignoredDir(root, path, ignores) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.Type()&fs.ModeType != 0 {
-			// Symlinks would otherwise be indexed with the link's own
-			// lstat size while hashing follows to the target; skip all
-			// non-regular files instead.
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(d.Name()))
-		for _, cat := range active {
-			if !cat.matches(ext) {
+		var hits []hit
+		unreadable := 0
+		for _, d := range dirents {
+			name := d.Name()
+			if d.IsDir() {
+				path := filepath.Join(dir, name)
+				if !includeHidden && strings.HasPrefix(name, ".") {
+					continue
+				}
+				if ignoredDir(root, path, ignores) {
+					continue
+				}
+				wg.Add(1)
+				go walk(path)
 				continue
 			}
-			info, err := d.Info()
-			if err != nil {
-				skipped++
-				return nil
+			if d.Type()&fs.ModeType != 0 {
+				// Symlinks would otherwise be indexed with the link's own
+				// lstat size while hashing follows to the target; skip all
+				// non-regular files instead.
+				continue
 			}
-			byCategory[cat.key] = append(byCategory[cat.key], &fileEntry{
-				path: path, ext: ext, size: info.Size(), mtime: info.ModTime().UnixNano(),
-			})
-			return nil
+			ext := strings.ToLower(filepath.Ext(name))
+			for _, cat := range active {
+				if !cat.matches(ext) {
+					continue
+				}
+				info, err := d.Info()
+				if err != nil {
+					unreadable++
+					break
+				}
+				hits = append(hits, hit{cat.key, &fileEntry{
+					path: filepath.Join(dir, name), ext: ext, size: info.Size(), mtime: info.ModTime().UnixNano(),
+				}})
+				break
+			}
 		}
-		return nil
-	})
+		if len(hits) == 0 && unreadable == 0 {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		for _, h := range hits {
+			byCategory[h.key] = append(byCategory[h.key], h.e)
+		}
+		skipped += unreadable
+	}
+	wg.Add(1)
+	walk(root)
+	wg.Wait()
+	// The parallel walk collects entries in nondeterministic order; sort
+	// by path so every downstream consumer sees a stable view.
+	for _, entries := range byCategory {
+		sort.Slice(entries, func(i, j int) bool { return entries[i].path < entries[j].path })
+	}
 	return byCategory, skipped
 }
 
@@ -666,17 +719,20 @@ func hashFile(path string) (string, error) {
 // hashCache persists computed SHA-256 hashes between runs so unchanged
 // files (same size and mtime) are never re-read. One cache file shared by
 // all scans, keyed by absolute file path — so hashing a parent directory
-// also warms the cache for later runs against its subdirectories. A nil
-// *hashCache is a valid no-op cache. get/put are safe for concurrent use
-// (lookups on the scan goroutine race with puts from hash workers).
+// also warms the cache for later runs against its subdirectories. The
+// file uses a compact length-prefixed binary format (hashes.bin): at
+// hundreds of thousands of entries, parsing the older JSON layout
+// dominated warm-cache runs. A nil *hashCache is a valid no-op cache.
+// get/put are safe for concurrent use (lookups on the scan goroutine
+// race with puts from hash workers).
 type hashCache struct {
 	mu      sync.Mutex
 	file    string
-	root    string // scan root; pruning is scoped to entries under it
-	legacy  string // pre-shared-layout per-root cache, merged then removed
+	root    string   // scan root; pruning is scoped to entries under it
+	legacy  []string // older JSON cache files, merged then removed on save
 	dirty   bool
 	touched map[string]bool
-	Entries map[string]cacheEntry `json:"entries"`
+	Entries map[string]cacheEntry
 }
 
 type cacheEntry struct {
@@ -685,35 +741,132 @@ type cacheEntry struct {
 	Hash  string `json:"sha256"`
 }
 
+// cacheMagic starts every binary cache file: format name plus a version
+// byte. A file without it (or from a different version) is ignored.
+var cacheMagic = []byte("QAPC\x01")
+
+// encodeCache serializes entries into the binary cache format: the magic,
+// an entry count, then per entry the path, size, mtime, and hash, with
+// varint lengths and values.
+func encodeCache(entries map[string]cacheEntry) []byte {
+	var b bytes.Buffer
+	b.Write(cacheMagic)
+	var tmp [binary.MaxVarintLen64]byte
+	putUvarint := func(v uint64) { b.Write(tmp[:binary.PutUvarint(tmp[:], v)]) }
+	putVarint := func(v int64) { b.Write(tmp[:binary.PutVarint(tmp[:], v)]) }
+	putString := func(s string) { putUvarint(uint64(len(s))); b.WriteString(s) }
+	putUvarint(uint64(len(entries)))
+	for path, e := range entries {
+		putString(path)
+		putVarint(e.Size)
+		putVarint(e.Mtime)
+		putString(e.Hash)
+	}
+	return b.Bytes()
+}
+
+// decodeCache parses data produced by encodeCache. ok is false for any
+// malformed or foreign input — the caller treats that as an empty cache.
+func decodeCache(data []byte) (entries map[string]cacheEntry, ok bool) {
+	if !bytes.HasPrefix(data, cacheMagic) {
+		return nil, false
+	}
+	data = data[len(cacheMagic):]
+	uvarint := func() (uint64, bool) {
+		v, n := binary.Uvarint(data)
+		if n <= 0 {
+			return 0, false
+		}
+		data = data[n:]
+		return v, true
+	}
+	varint := func() (int64, bool) {
+		v, n := binary.Varint(data)
+		if n <= 0 {
+			return 0, false
+		}
+		data = data[n:]
+		return v, true
+	}
+	str := func() (string, bool) {
+		l, ok := uvarint()
+		if !ok || l > uint64(len(data)) {
+			return "", false
+		}
+		s := string(data[:l])
+		data = data[l:]
+		return s, true
+	}
+	count, ok := uvarint()
+	if !ok {
+		return nil, false
+	}
+	// The count is a size hint from untrusted bytes; cap the initial
+	// allocation so a corrupt header can't balloon memory.
+	hint := count
+	if hint > 1<<20 {
+		hint = 1 << 20
+	}
+	entries = make(map[string]cacheEntry, hint)
+	for i := uint64(0); i < count; i++ {
+		path, ok1 := str()
+		size, ok2 := varint()
+		mtime, ok3 := varint()
+		hash, ok4 := str()
+		if !ok1 || !ok2 || !ok3 || !ok4 {
+			return nil, false
+		}
+		entries[path] = cacheEntry{Size: size, Mtime: mtime, Hash: hash}
+	}
+	return entries, true
+}
+
 // loadCache reads the shared cache, returning an empty cache on any error
-// (missing file, corrupt JSON) — the cache is an optimization only. A
-// legacy per-root cache file (older layout) is merged in and cleaned up
-// on save.
+// (missing file, corrupt data) — the cache is an optimization only.
+// Legacy JSON caches from older versions (the shared hashes.json, and the
+// per-root layout before that) are merged in and cleaned up on save.
 func loadCache(root string) *hashCache {
 	dir, err := os.UserCacheDir()
 	if err != nil {
 		return nil
 	}
+	dir = filepath.Join(dir, "quickap")
+	sum := sha256.Sum256([]byte(root))
+	return loadCacheFiles(root, filepath.Join(dir, "hashes.bin"), []string{
+		filepath.Join(dir, "hashes.json"),
+		filepath.Join(dir, hex.EncodeToString(sum[:8])+".json"),
+	})
+}
+
+// loadCacheFiles reads the binary cache at file, then merges every legacy
+// JSON cache that still exists. Reading a legacy file marks the cache
+// dirty so the next save persists the merge and removes the old file.
+func loadCacheFiles(root, file string, legacy []string) *hashCache {
 	c := &hashCache{
-		file:    filepath.Join(dir, "quickap", "hashes.json"),
+		file:    file,
 		root:    root,
+		legacy:  legacy,
 		touched: map[string]bool{},
 		Entries: map[string]cacheEntry{},
 	}
 	if data, err := os.ReadFile(c.file); err == nil {
-		if json.Unmarshal(data, c) != nil || c.Entries == nil {
-			c.Entries = map[string]cacheEntry{}
+		if entries, ok := decodeCache(data); ok {
+			c.Entries = entries
 		}
 	}
-	sum := sha256.Sum256([]byte(root))
-	c.legacy = filepath.Join(dir, "quickap", hex.EncodeToString(sum[:8])+".json")
-	if data, err := os.ReadFile(c.legacy); err == nil {
-		var old hashCache
+	for _, lf := range legacy {
+		data, err := os.ReadFile(lf)
+		if err != nil {
+			continue
+		}
+		c.dirty = true // rewrite in the new format and remove the old file
+		var old struct {
+			Entries map[string]cacheEntry `json:"entries"`
+		}
 		if json.Unmarshal(data, &old) == nil {
 			for path, e := range old.Entries {
 				if _, ok := c.Entries[path]; !ok {
 					c.Entries[path] = e
-					c.dirty = true
 				}
 			}
 		}
@@ -770,15 +923,13 @@ func (c *hashCache) save() {
 	if !c.dirty {
 		return
 	}
-	data, err := json.Marshal(c)
-	if err != nil {
-		return
-	}
 	if os.MkdirAll(filepath.Dir(c.file), 0o755) != nil {
 		return
 	}
-	if os.WriteFile(c.file, data, 0o644) == nil && c.legacy != "" {
-		os.Remove(c.legacy)
+	if os.WriteFile(c.file, encodeCache(c.Entries), 0o644) == nil {
+		for _, lf := range c.legacy {
+			os.Remove(lf)
+		}
 	}
 }
 

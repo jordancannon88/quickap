@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -293,19 +295,19 @@ func TestCacheSavePrunesDeleted(t *testing.T) {
 	}
 	c.save()
 
-	loaded := &hashCache{Entries: map[string]cacheEntry{}}
 	data, err := os.ReadFile(c.file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(data, loaded); err != nil {
-		t.Fatal(err)
+	entries, ok := decodeCache(data)
+	if !ok {
+		t.Fatal("saved cache did not decode")
 	}
-	if _, ok := loaded.Entries[kept]; !ok {
+	if _, ok := entries[kept]; !ok {
 		t.Error("existing file's entry should survive save")
 	}
-	if len(loaded.Entries) != 1 {
-		t.Errorf("entries after prune = %d, want 1", len(loaded.Entries))
+	if len(entries) != 1 {
+		t.Errorf("entries after prune = %d, want 1", len(entries))
 	}
 }
 
@@ -327,19 +329,137 @@ func TestCacheSavePruneScopedToRoot(t *testing.T) {
 	}
 	c.save()
 
-	loaded := &hashCache{Entries: map[string]cacheEntry{}}
 	data, err := os.ReadFile(c.file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(data, loaded); err != nil {
-		t.Fatal(err)
+	entries, ok := decodeCache(data)
+	if !ok {
+		t.Fatal("saved cache did not decode")
 	}
-	if _, ok := loaded.Entries[inRootGone]; ok {
+	if _, ok := entries[inRootGone]; ok {
 		t.Error("missing file under root should be pruned")
 	}
-	if _, ok := loaded.Entries[outside]; !ok {
+	if _, ok := entries[outside]; !ok {
 		t.Error("missing file outside root must be kept — it belongs to another tree")
+	}
+}
+
+func TestCacheEncodeDecode(t *testing.T) {
+	entries := map[string]cacheEntry{
+		"/a/b.jpg":                       {Size: 100, Mtime: 42, Hash: "deadbeef"},
+		"/c d/é ü.png":                   {Size: 0, Mtime: -5, Hash: ""},
+		"/z/" + strings.Repeat("x", 300): {Size: 1 << 40, Mtime: 1719999999999999999, Hash: strings.Repeat("ab", 32)},
+	}
+	got, ok := decodeCache(encodeCache(entries))
+	if !ok {
+		t.Fatal("roundtrip decode failed")
+	}
+	if !reflect.DeepEqual(got, entries) {
+		t.Errorf("roundtrip = %#v, want %#v", got, entries)
+	}
+
+	if got, ok := decodeCache(encodeCache(nil)); !ok || len(got) != 0 {
+		t.Error("empty cache should roundtrip to zero entries")
+	}
+	if _, ok := decodeCache(nil); ok {
+		t.Error("empty input should not decode")
+	}
+	if _, ok := decodeCache([]byte(`{"entries":{}}`)); ok {
+		t.Error("a legacy JSON cache should not decode as binary")
+	}
+	enc := encodeCache(entries)
+	if _, ok := decodeCache(enc[:len(enc)-3]); ok {
+		t.Error("truncated input should not decode")
+	}
+}
+
+// Caches written by older versions — the shared JSON layout, and the
+// per-root JSON layout before that — are merged into the binary cache on
+// load and removed by the next save. On conflicts the binary cache wins.
+func TestLoadCacheMigratesLegacyJSON(t *testing.T) {
+	dir := t.TempDir()
+	binFile := filepath.Join(dir, "hashes.bin")
+	legacyShared := filepath.Join(dir, "hashes.json")
+	legacyPerRoot := filepath.Join(dir, "deadbeef.json")
+
+	if err := os.WriteFile(binFile, encodeCache(map[string]cacheEntry{
+		"/bin.jpg":  {Size: 1, Mtime: 1, Hash: "aa"},
+		"/both.jpg": {Size: 2, Mtime: 2, Hash: "from-bin"},
+	}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON := func(path string, entries map[string]cacheEntry) {
+		t.Helper()
+		data, err := json.Marshal(map[string]map[string]cacheEntry{"entries": entries})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeJSON(legacyShared, map[string]cacheEntry{
+		"/both.jpg": {Size: 2, Mtime: 2, Hash: "from-json"},
+		"/json.jpg": {Size: 3, Mtime: 3, Hash: "bb"},
+	})
+	writeJSON(legacyPerRoot, map[string]cacheEntry{
+		"/perroot.jpg": {Size: 4, Mtime: 4, Hash: "cc"},
+	})
+
+	c := loadCacheFiles("/scanroot", binFile, []string{legacyShared, legacyPerRoot})
+	if len(c.Entries) != 4 {
+		t.Fatalf("merged entries = %d, want 4", len(c.Entries))
+	}
+	if c.Entries["/both.jpg"].Hash != "from-bin" {
+		t.Errorf("conflicting path hash = %q, want the binary cache to win", c.Entries["/both.jpg"].Hash)
+	}
+	if !c.dirty {
+		t.Error("merging legacy caches should mark the cache dirty")
+	}
+
+	c.save()
+	for _, lf := range []string{legacyShared, legacyPerRoot} {
+		if _, err := os.Stat(lf); !os.IsNotExist(err) {
+			t.Errorf("legacy cache %s should be removed after save", filepath.Base(lf))
+		}
+	}
+	data, err := os.ReadFile(binFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries, ok := decodeCache(data); !ok || len(entries) != 4 {
+		t.Errorf("saved binary cache decode = %d entries, %v; want 4, true", len(entries), ok)
+	}
+}
+
+// The walk is parallel, so arrival order is nondeterministic; scan must
+// hand every consumer path-sorted entries.
+func TestScanSortsEntries(t *testing.T) {
+	dir := t.TempDir()
+	var want []string
+	for _, rel := range []string{"z.txt", "b/nested.txt", "a.txt", "m/deep/x.txt"} {
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, path)
+	}
+	sort.Strings(want)
+
+	byCategory, skipped := scan(dir, categories, false, nil)
+	if skipped != 0 {
+		t.Fatalf("skipped = %d, want 0", skipped)
+	}
+	var got []string
+	for _, e := range byCategory["documents"] {
+		got = append(got, e.path)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("scan order = %v, want %v", got, want)
 	}
 }
 

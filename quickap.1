@@ -344,16 +344,20 @@ one-time
 run.
 .SH FILES
 .TP
-.I ~/.cache/quickap/hashes.json
+.I ~/.cache/quickap/hashes.bin
 The hash cache on Linux and the BSDs (or
-.IR $XDG_CACHE_HOME/quickap/hashes.json
+.IR $XDG_CACHE_HOME/quickap/hashes.bin
 if set).
 On macOS:
 .IR ~/Library/Caches/quickap/ ;
 on Windows:
 .IR %LocalAppData%\equickap\e .
-A JSON map of path to size, mtime, and SHA-256 for every file that has
-been content-hashed.
+A compact binary map of path to size, mtime, and SHA-256 for every
+file that has been content-hashed.
+A
+.I hashes.json
+written by an older version is migrated into it automatically on the
+next run.
 .TP
 .I DIR/quickap-organize-failures.txt
 Written into the

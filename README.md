@@ -302,12 +302,15 @@ Flags stack freely on any command:
 | macOS    | `~/Library/Caches/quickap/` |
 | Windows  | `%LocalAppData%\quickap\` |
 
-All scans share a single `hashes.json` keyed by absolute file path, so
-hashing a parent directory also warms the cache for its subdirectories.
-Nothing is ever written into the scanned directories. Housekeeping is
-automatic — stale entries are pruned, and a missing or corrupt cache
-just means the next run re-hashes. Deleting the cache directory is
-always safe; use `-verify` to force a full re-hash.
+All scans share a single `hashes.bin` (a compact binary format — fast
+to load even at hundreds of thousands of entries) keyed by absolute
+file path, so hashing a parent directory also warms the cache for its
+subdirectories. A `hashes.json` from an older version is migrated
+automatically on the next run. Nothing is ever written into the
+scanned directories. Housekeeping is automatic — stale entries are
+pruned, and a missing or corrupt cache just means the next run
+re-hashes. Deleting the cache directory is always safe; use `-verify`
+to force a full re-hash.
 
 ## Categories
 
